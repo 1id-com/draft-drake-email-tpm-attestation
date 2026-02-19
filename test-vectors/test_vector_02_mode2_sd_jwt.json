@@ -1,0 +1,96 @@
+{
+  "_comment": "Test Vector 2: SD-JWT Trust Proof (Mode 2)",
+  "_draft": "draft-drake-email-tpm-attestation-00",
+  "_section": "Section 5 (Trust Proof via SD-JWT)",
+
+  "description": "A TPM-Trust-Proof header using an SD-JWT from a trust registry (1id.com), disclosing only the trust_tier claim.",
+
+  "email_body_utf8": "This message was sent by a hardware-attested AI agent.\r\n",
+
+  "sd_jwt_structure": {
+    "_comment": "SD-JWT format: <issuer-signed-jwt>~<disclosure1>~<disclosure2>~...~",
+
+    "issuer_signed_jwt": {
+      "header": {
+        "alg": "ES256",
+        "typ": "sd+jwt",
+        "kid": "1id-com-signing-key-001"
+      },
+      "payload": {
+        "iss": "https://1id.com",
+        "sub": "agent@example.com",
+        "iat": 1739900000,
+        "exp": 1739986400,
+        "cnf": {
+          "jwk": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "<base64url-encoded x coordinate>",
+            "y": "<base64url-encoded y coordinate>"
+          }
+        },
+        "anti_sybil": true,
+        "_sd_alg": "sha-256",
+        "_sd": [
+          "<sha256-digest-of-disclosure-hw_fingerprint>",
+          "<sha256-digest-of-disclosure-hw_manufacturer>",
+          "<sha256-digest-of-disclosure-hw_type>",
+          "<sha256-digest-of-disclosure-trust_tier>"
+        ]
+      }
+    },
+
+    "disclosable_claims": {
+      "hw_fingerprint": {
+        "full_disclosure": ["<salt>", "hw_fingerprint", "sha256:a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"],
+        "disclosed_in_this_vector": false,
+        "privacy_note": "Omitted -- reveals unique device identity"
+      },
+      "hw_manufacturer": {
+        "full_disclosure": ["<salt>", "hw_manufacturer", "INTC"],
+        "disclosed_in_this_vector": false,
+        "privacy_note": "Omitted -- narrows device population"
+      },
+      "hw_type": {
+        "full_disclosure": ["<salt>", "hw_type", "tpm2.0"],
+        "disclosed_in_this_vector": false,
+        "privacy_note": "Omitted -- narrows device population"
+      },
+      "trust_tier": {
+        "full_disclosure": ["<salt>", "trust_tier", "sovereign"],
+        "disclosed_in_this_vector": true,
+        "privacy_note": "Disclosed -- reveals trust level without identifying the device"
+      }
+    }
+  },
+
+  "header_fields": {
+    "v": "1",
+    "bh": "<base64url SHA-256 of email body>",
+    "sd-jwt": "<issuer-signed-jwt>~<trust_tier_disclosure>~"
+  },
+
+  "verification_steps": [
+    "1. Parse the TPM-Trust-Proof header fields (v, bh, sd-jwt).",
+    "2. Compute SHA-256 of the email body; compare with bh field.",
+    "3. Split the sd-jwt field on '~' to get the issuer-signed JWT and disclosures.",
+    "4. Decode the JWT header to find 'kid' and look up the trust registry public key.",
+    "5. Verify the JWT signature using the trust registry's public key.",
+    "6. Verify exp > now and |now - iat| < max_drift.",
+    "7. For each disclosure: decode base64url -> JSON array [salt, name, value].",
+    "8. For each disclosure: verify SHA-256(disclosure_b64) appears in the JWT _sd array.",
+    "9. Extract disclosed claims (in this vector: trust_tier=sovereign).",
+    "10. Verify anti_sybil=true in the JWT payload (always visible, not selectively disclosed).",
+    "11. Output Authentication-Results: tpm-trust=pass header.iss=https://1id.com header.tier=sovereign"
+  ],
+
+  "expected_authentication_results": "Authentication-Results: mx.example.com; tpm-trust=pass header.iss=https://1id.com header.tier=sovereign header.sub=agent@example.com",
+
+  "privacy_comparison_with_mode1": {
+    "mode1_reveals": ["Full certificate chain", "TPM manufacturer", "Unique hardware fingerprint", "AK public key"],
+    "mode2_reveals_in_this_example": ["Trust tier (sovereign)", "Anti-Sybil flag (true)", "Subject email"],
+    "mode2_conceals_in_this_example": ["Hardware fingerprint", "Manufacturer code", "Hardware type"],
+    "summary": "Mode 2 reveals only that the sender has been attested at the 'sovereign' tier and that anti-Sybil enforcement was applied, without exposing any hardware-specific identifiers."
+  }
+}
+

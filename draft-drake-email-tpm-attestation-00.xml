@@ -1,0 +1,1351 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-model href="urn:ietf:rfc:7991" type="application/relax-ng-compact-syntax"?>
+<rfc xmlns:xi="http://www.w3.org/2001/XInclude"
+     docName="draft-drake-email-tpm-attestation-00"
+     ipr="trust200902"
+     submissionType="IETF"
+     category="std"
+     consensus="true"
+     xml:lang="en"
+     version="3">
+
+  <front>
+    <title abbrev="TPM Email Attestation">
+      Hardware Attestation for Email Sender Verification
+    </title>
+
+    <seriesInfo name="Internet-Draft"
+                value="draft-drake-email-tpm-attestation-00"/>
+
+    <author fullname="Christopher Drake" initials="C." surname="Drake">
+      <organization>1id.com</organization>
+      <address>
+        <email>cnd@1id.com</email>
+        <uri>https://1id.com</uri>
+      </address>
+    </author>
+
+    <date year="2026" month="February" day="19"/>
+
+    <area>Security</area>
+    <workgroup>Internet Engineering Task Force</workgroup>
+
+    <keyword>TPM</keyword>
+    <keyword>email</keyword>
+    <keyword>attestation</keyword>
+    <keyword>Sybil</keyword>
+    <keyword>spam</keyword>
+    <keyword>hardware identity</keyword>
+    <keyword>AI agents</keyword>
+    <keyword>HTTP</keyword>
+    <keyword>transport-independent</keyword>
+
+    <abstract>
+      <t>
+        This document defines a mechanism for email senders to include
+        hardware attestation evidence in message headers, enabling
+        receiving mail servers to cryptographically verify that an email
+        was composed on a machine containing a genuine Trusted Platform
+        Module (TPM) from a known manufacturer (Intel, AMD, Infineon, or
+        similar).  The verification chain runs from the email header
+        directly to the TPM manufacturer's root Certificate Authority,
+        requiring no trust in any intermediary identity service.
+      </t>
+      <t>
+        As a companion mechanism, this document also defines a
+        privacy-preserving alternative using SD-JWT (Selective Disclosure
+        JWT, RFC 9901) where the sender can prove specific claims about
+        their hardware trust level without revealing their hardware
+        identity.
+      </t>
+      <t>
+        Together, these mechanisms provide Sybil-resistant email
+        authentication: each sender requires a unique physical security
+        chip, making large-scale automated spam economically infeasible
+        regardless of advances in artificial intelligence.
+      </t>
+      <t>
+        While this document specifies these mechanisms for email message
+        headers, the attestation formats defined herein - both the CMS
+        attestation bundle and the SD-JWT trust proof - are
+        self-contained, transport-independent data structures applicable
+        to HTTP headers, agent-to-agent messaging, and other Internet
+        protocols.
+      </t>
+    </abstract>
+
+  </front>
+
+  <middle>
+
+    <!-- ====================================================== -->
+    <section anchor="introduction">
+      <name>Introduction</name>
+
+      <t>
+        Email authentication today relies on three complementary
+        mechanisms: SPF <xref target="RFC7208"/> verifies the sending
+        IP address, DKIM <xref target="RFC6376"/> provides a
+        domain-level cryptographic signature, and DMARC
+        <xref target="RFC7489"/> ties them together with policy.
+        These mechanisms prove that an email was authorised by a
+        domain.  They do not prove anything about the physical
+        infrastructure that composed or sent the message.
+      </t>
+      <t>
+        This distinction has become critical.  The rapid proliferation
+        of autonomous AI agents capable of composing human-quality text
+        has rendered content-based spam detection increasingly
+        ineffective.  An attacker can register unlimited domains,
+        configure valid SPF/DKIM/DMARC, and use AI to generate
+        messages indistinguishable from legitimate correspondence.
+        Every existing defence - CAPTCHAs, phone verification,
+        behavioural analysis, IP reputation - fails when the attacker
+        is an AI that can operate at scale with near-zero marginal cost.
+      </t>
+      <t>
+        The fundamental problem is that all existing sender identity
+        signals are software-based and therefore copyable at zero cost.
+        This document proposes anchoring sender identity to physics,
+        applying the remote attestation architecture of
+        <xref target="RFC9334"/> to email: specifically, to the Trusted
+        Platform Module (TPM) chip present in virtually every modern PC,
+        server, and many embedded devices.
+      </t>
+      <t>
+        A TPM contains a unique Endorsement Key (EK) burned in at the
+        factory by the chip manufacturer, with a certificate chaining
+        to the manufacturer's root CA.  This key cannot be extracted,
+        cloned, or transferred.  By signing email content with a
+        TPM-resident key and including the certificate chain in the
+        message headers, a sender proves that the email originated on
+        a specific, genuine piece of hardware.
+      </t>
+      <t>
+        Receiving mail servers can verify this proof by validating the
+        certificate chain against manufacturer root CAs - the same CAs
+        they already trust for Secure Boot, platform integrity, and
+        other TPM-dependent operations.  No new trust relationships are
+        required.
+      </t>
+      <t>
+        This document defines two complementary mechanisms:
+      </t>
+      <ol>
+        <li>
+          <strong>Direct TPM Attestation</strong>
+          (<xref target="direct-tpm"/>): A CMS
+          <xref target="RFC5652"/> signed-data structure containing the
+          attestation signature and full certificate chain, carried in
+          an email header.  Verifiable directly against manufacturer
+          root CAs.  Optimised for deliverability.
+        </li>
+        <li>
+          <strong>SD-JWT Trust Proof</strong>
+          (<xref target="sd-jwt-proof"/>): A Selective Disclosure JWT
+          <xref target="RFC9901"/> issued by a trust registry, where
+          the sender selects which claims to reveal.  Optimised for
+          privacy in contexts where revealing hardware identity is
+          undesirable.
+        </li>
+      </ol>
+      <t>
+        While this document defines these mechanisms for email, the
+        attestation formats themselves are transport-independent: the
+        CMS attestation bundle and SD-JWT trust proof are self-contained
+        data structures that can be carried in any protocol capable of
+        transporting octet strings.  <xref target="other-transports"/>
+        discusses applicability to HTTP and other protocols.
+      </t>
+
+      <section anchor="requirements-language">
+        <name>Requirements Language</name>
+        <t>
+          The key words "MUST", "MUST NOT", "REQUIRED", "SHALL",
+          "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED",
+          "NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document
+          are to be interpreted as described in BCP 14
+          <xref target="RFC2119"/> <xref target="RFC8174"/> when,
+          and only when, they appear in all capitals, as shown here.
+        </t>
+      </section>
+
+      <section anchor="terminology">
+        <name>Terminology</name>
+        <dl>
+          <dt>TPM</dt>
+          <dd>Trusted Platform Module, as specified by the Trusted
+          Computing Group (TCG) <xref target="TCG-TPM2"/>.
+          This document assumes TPM 2.0.</dd>
+
+          <dt>EK</dt>
+          <dd>Endorsement Key.  A unique RSA or ECC key pair generated
+          inside the TPM at manufacturing time, as profiled in
+          <xref target="TCG-EK-PROFILE"/>.  The EK private key
+          never leaves the TPM.  The EK certificate is signed by the
+          chip manufacturer's CA.</dd>
+
+          <dt>AK</dt>
+          <dd>Attestation Key.  A signing key generated inside the TPM
+          after deployment, certified by the EK (via TPM2_Certify) to
+          prove it resides in the same TPM.  Used for signing operations
+          in this protocol.</dd>
+
+          <dt>Manufacturer CA</dt>
+          <dd>The Certificate Authority operated by the TPM chip
+          manufacturer (e.g., Intel, AMD, Infineon) that signs EK
+          certificates.  Root CA certificates are publicly available.</dd>
+
+          <dt>Trust Registry</dt>
+          <dd>An entity that verifies TPM attestation evidence at
+          enrollment time and subsequently issues trust assertions
+          (e.g., SD-JWTs) about enrolled entities.  A Trust Registry
+          is OPTIONAL for Mode 1 (Direct TPM Attestation) and REQUIRED
+          for Mode 2 (SD-JWT Trust Proof).</dd>
+
+          <dt>HSM</dt>
+          <dd>Hardware Security Module.  A physical device that
+          safeguards cryptographic keys and provides cryptographic
+          processing.  TPMs are one category of HSM; portable
+          smart cards (such as PIV-capable YubiKeys) are another.
+          This document focuses on TPM-based attestation; companion
+          documents may address other HSM types.</dd>
+
+          <dt>Sybil Attack</dt>
+          <dd>An attack where a single adversary creates many
+          pseudonymous identities to subvert a reputation or
+          trust system.</dd>
+        </dl>
+      </section>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="problem-statement">
+      <name>Problem Statement</name>
+
+      <t>
+        The economic model of email spam has historically depended on
+        the near-zero cost of sending messages.  Anti-spam defences
+        have worked by raising costs (CAPTCHAs impose human attention
+        costs, IP reputation requires infrastructure investment,
+        phone verification requires SIM procurement).
+      </t>
+      <t>
+        AI agents eliminate these costs.  An AI can solve CAPTCHAs,
+        generate unique content for each message, rotate through
+        residential proxy IPs, and operate continuously without human
+        attention.  The result is that cost-based anti-spam defences
+        approach zero effectiveness as AI capabilities improve.
+      </t>
+      <t>
+        Hardware attestation re-introduces a cost floor that AI
+        cannot eliminate: each sender identity requires a physical
+        TPM chip.  TPM chips have real manufacturing costs, exist in
+        physical supply chains, and each contains a globally unique
+        key pair certified by the manufacturer.  An attacker seeking
+        to create N sender identities needs N physical machines, each
+        with a genuine TPM - a cost of approximately $500-2000 per
+        identity (machine + TPM) compared to approximately $0 per
+        identity with software-only approaches.
+      </t>
+      <t>
+        Furthermore, because each TPM identity is unique and
+        persistent, receiving mail servers can build per-hardware
+        reputation.  A TPM that sends spam is flagged permanently.
+        The attacker cannot simply create a new account - they need
+        new physical hardware.
+      </t>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="applicability">
+      <name>Applicability</name>
+      <t>
+        This specification targets authentication of automated
+        senders - AI agents, bots, and high-volume automated
+        systems - where Sybil resistance justifies hardware-anchored
+        identity.  The proliferation of autonomous AI agents capable
+        of generating human-quality content at scale is the primary
+        motivation.
+      </t>
+      <t>
+        This specification is NOT intended or recommended for
+        individual human users sending personal or low-volume email.
+        Human senders using consumer mail user agents (e.g., Gmail
+        web client, Outlook) face privacy risks from Mode 1 Direct
+        Attestation that are disproportionate to the benefit: the
+        hardware fingerprint (EK public key hash) uniquely identifies
+        the sending machine across all messages and contexts,
+        enabling long-term tracking that exceeds current email
+        privacy norms.  Mode 2 (SD-JWT Trust Proof) mitigates this
+        via selective disclosure but requires enrollment with a
+        Trust Registry, which is not a typical consumer workflow.
+      </t>
+      <t>
+        Operators of human-facing email services MAY offer TPM
+        attestation as an opt-in feature (e.g., via a browser
+        extension or MUA plugin), but MUST provide clear disclosure
+        of the linkability implications before activation.
+        Receivers SHOULD NOT penalise the absence of TPM attestation
+        from senders exhibiting human-characteristic patterns
+        (e.g., low volume, natural language variance, interactive
+        reply chains).
+      </t>
+      <t>
+        For human identity proofs in email, existing mechanisms
+        such as S/MIME <xref target="RFC8551"/> and DANE
+        <xref target="RFC7671"/> remain appropriate.
+      </t>
+      <t>
+        The attestation formats defined in this document - both the CMS
+        attestation bundle and the SD-JWT trust proof - are
+        self-contained data structures not inherently specific to email.
+        They can be carried in HTTP headers, HTTP request bodies,
+        WebSocket messages, or any protocol supporting opaque octet
+        strings.  <xref target="other-transports"/> discusses
+        applicability to other transports.  This document specifies the
+        email transport binding as the primary application.
+      </t>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="direct-tpm">
+      <name>Mode 1: Direct TPM Attestation</name>
+
+      <t>
+        This section defines a CMS-based attestation bundle containing
+        a hardware-anchored signature and its full certificate chain.
+        While presented here in the context of email headers
+        (<xref target="header-format"/>), the CMS SignedData structure
+        is a self-contained, transport-independent data object; see
+        <xref target="other-transports"/> for applicability to other
+        protocols.
+      </t>
+
+      <section anchor="attestation-chain">
+        <name>Attestation Certificate Chain</name>
+        <t>
+          The attestation chain consists of the following certificates,
+          ordered from leaf to root:
+        </t>
+        <ol>
+          <li>
+            <strong>AK Certificate:</strong> Created by TPM2_Certify,
+            binding the AK public key to the EK-identified TPM.
+            Contains the AK public key and the EK's certification
+            signature.
+          </li>
+          <li>
+            <strong>EK Certificate:</strong> Issued by the TPM
+            manufacturer at fabrication time.  Contains the EK public
+            key, TPM manufacturer identity, and TPM model information.
+            Signed by the manufacturer's intermediate CA.
+          </li>
+          <li>
+            <strong>Manufacturer Intermediate CA Certificate(s):</strong>
+            Zero or more intermediate CA certificates forming the chain
+            between the EK certificate issuer and the manufacturer root.
+          </li>
+          <li>
+            <strong>Manufacturer Root CA Certificate:</strong> The trust
+            anchor.  This certificate SHOULD already be present in the
+            verifier's trust store.  Major TPM manufacturer root CAs
+            are published at well-known URLs (e.g., Intel's Trusted
+            Services API, AMD's Key Distribution Server).
+          </li>
+        </ol>
+      </section>
+
+      <section anchor="header-format">
+        <name>Header Field Definition</name>
+        <t>
+          This document defines the "TPM-Attestation" header field for
+          use in email messages.
+        </t>
+
+        <artwork type="abnf"><![CDATA[
+TPM-Attestation = "TPM-Attestation" ":" SP tpm-attest-value CRLF
+
+tpm-attest-value = tpm-version ";" SP
+                   tpm-algorithm ";" SP
+                   tpm-body-hash ";" SP
+                   tpm-timestamp ";" SP
+                   tpm-chain
+
+tpm-version    = "v" "=" "1"
+tpm-algorithm  = "alg" "=" ("RS256" / "ES256" / "PS256")
+tpm-body-hash  = "bh" "=" base64url
+tpm-timestamp  = "ts" "=" 1*DIGIT
+tpm-chain      = "chain" "=" base64
+        ]]></artwork>
+
+        <t>Where:</t>
+        <dl>
+          <dt>v</dt>
+          <dd>Protocol version.  MUST be "1" for this specification.</dd>
+
+          <dt>alg</dt>
+          <dd>The signature algorithm used by the AK.  MUST be one of
+          RS256 (RSASSA-PKCS1-v1_5 with SHA-256), ES256 (ECDSA with
+          P-256 and SHA-256), or PS256 (RSASSA-PSS with SHA-256).
+          RS256 is RECOMMENDED for maximum compatibility with existing
+          TPM deployments.</dd>
+
+          <dt>bh</dt>
+          <dd>The base64url-encoded SHA-256 hash of the canonicalised
+          email body, computed using the same canonicalisation algorithm
+          as DKIM simple body canonicalisation
+          <xref target="RFC6376" section="3.4.3"/>.</dd>
+
+          <dt>ts</dt>
+          <dd>Unix timestamp (seconds since 1970-01-01T00:00:00Z)
+          at which the attestation signature was created.</dd>
+
+          <dt>chain</dt>
+          <dd>
+            <t>A base64-encoded CMS SignedData structure
+            <xref target="RFC5652"/> containing:</t>
+            <ul>
+              <li>The AK signature over the concatenation of the body
+              hash and timestamp: Sign(AK, SHA-256(bh || ts))</li>
+              <li>The AK certificate</li>
+              <li>The EK certificate</li>
+              <li>Any intermediate CA certificates</li>
+            </ul>
+            <t>The CMS structure uses the SignedData content type (OID
+            1.2.840.113549.1.7.2).  The encapContentInfo MUST be
+            absent (detached signature); the signed content is the
+            body hash concatenated with the timestamp, provided in
+            the bh and ts fields.</t>
+          </dd>
+        </dl>
+      </section>
+
+      <section anchor="verification-algorithm">
+        <name>Verification Algorithm</name>
+        <t>
+          A receiving mail server that supports this specification
+          MUST perform the following steps when a TPM-Attestation
+          header is present:
+        </t>
+        <ol>
+          <li>
+            Parse the TPM-Attestation header field and extract v, alg,
+            bh, ts, and chain.  If parsing fails, the result is "none"
+            (header malformed).
+          </li>
+          <li>
+            Verify that v equals "1".  If not, the result is "none"
+            (unsupported version).
+          </li>
+          <li>
+            Compute the SHA-256 hash of the canonicalised email body
+            using DKIM simple body canonicalisation.  Compare with bh.
+            If they differ, the result is "fail" (body modified).
+          </li>
+          <li>
+            Verify that ts is within an acceptable window of the
+            current time.  A window of 300 seconds (5 minutes) is
+            RECOMMENDED for direct SMTP delivery.  Verifiers SHOULD
+            allow a wider window (up to 3600 seconds / 1 hour) for
+            messages that have passed through intermediate MTAs, as
+            indicated by Received headers or queue delays.  The ts
+            value reflects when the sender created the attestation,
+            not when the MTA transmitted the message; multi-hop
+            delivery and temporary queue backlogs are common
+            operational realities.  If ts is outside the acceptable
+            window, the result is "fail" (timestamp expired).
+          </li>
+          <li>
+            Decode the base64 chain value and parse as a CMS SignedData
+            structure.  Extract the signer certificate (AK certificate)
+            and the certificate chain.
+          </li>
+          <li>
+            <t>Validate the certificate chain:</t>
+            <ol type="a">
+              <li>The AK certificate MUST contain a TPM2_Certify
+              structure in an extension or as the subject, binding the
+              AK public key to the EK.</li>
+              <li>The EK certificate MUST chain to a manufacturer
+              intermediate CA certificate.</li>
+              <li>The manufacturer intermediate CA MUST chain to a
+              manufacturer root CA present in the verifier's
+              TPM manufacturer CA trust store.</li>
+            </ol>
+            <t>If chain validation fails, the result is "fail"
+            (chain invalid).</t>
+          </li>
+          <li>
+            Verify the CMS signature using the AK public key and the
+            specified algorithm.  The signed content is
+            SHA-256(bh || ts).  If signature verification fails, the
+            result is "fail" (bad signature).
+          </li>
+          <li>
+            <t>If all checks pass, the result is "pass".  The verifier
+            MAY extract the following information from the certificate
+            chain:</t>
+            <ul>
+              <li>TPM manufacturer (from EK certificate issuer)</li>
+              <li>TPM model or family (from EK certificate extensions)</li>
+              <li>Hardware fingerprint: SHA-256 hash of the EK public key</li>
+            </ul>
+          </li>
+        </ol>
+      </section>
+
+      <section anchor="auth-results">
+        <name>Authentication-Results Integration</name>
+        <t>
+          When recording the result of TPM-Attestation verification in
+          an Authentication-Results header field <xref target="RFC8601"/>,
+          the following method identifier and property types are used:
+        </t>
+        <artwork><![CDATA[
+Authentication-Results: mx.example.com;
+  tpm-attest=pass
+    header.alg=RS256
+    header.mfr=INTC
+    header.hw=tpm2.0
+    header.chip=sha256:a1b2c3d4...
+        ]]></artwork>
+        <t>Where:</t>
+        <dl>
+          <dt>tpm-attest</dt>
+          <dd>The method identifier.  Result is one of: "pass",
+          "fail", "none" (header absent or unparseable), "temperror"
+          (transient verification error), or "permerror" (permanent
+          verification error).</dd>
+
+          <dt>header.alg</dt>
+          <dd>The signature algorithm from the TPM-Attestation header.</dd>
+
+          <dt>header.mfr</dt>
+          <dd>The TPM manufacturer code extracted from the EK certificate.
+          Common values: "INTC" (Intel), "AMD" (AMD), "IFX" (Infineon),
+          "STM" (STMicroelectronics), "NTC" (Nuvoton), "VMW" (VMware,
+          virtual TPM).</dd>
+
+          <dt>header.hw</dt>
+          <dd>The hardware type.  "tpm2.0" for a hardware or firmware TPM.
+          "vtpm2.0" for a hypervisor-provided virtual TPM.</dd>
+
+          <dt>header.chip</dt>
+          <dd>The SHA-256 hash of the EK public key, truncated to the
+          first 16 hex characters.  This serves as a compact hardware
+          fingerprint for reputation tracking.  Full fingerprint SHOULD
+          be available via an extended property.</dd>
+        </dl>
+      </section>
+
+      <section anchor="privacy-direct">
+        <name>Privacy Considerations for Direct Attestation</name>
+        <t>
+          Direct TPM Attestation reveals the sender's hardware
+          fingerprint (EK public key hash).  This fingerprint is
+          stable across all emails sent by the same machine, enabling
+          linkability.  This is a deliberate design choice: linkability
+          is desirable for reputation systems (a hardware identity that
+          sends spam can be permanently flagged) and is the mechanism
+          by which Sybil resistance is achieved.
+        </t>
+        <t>
+          Senders who require unlinkability between messages SHOULD use
+          Mode 2 (SD-JWT Trust Proof, <xref target="sd-jwt-proof"/>)
+          instead of or in addition to Direct TPM Attestation.
+        </t>
+        <t>
+          The EK certificate also reveals the TPM manufacturer and
+          model family.  In most deployments, this information is not
+          sensitive.  If the sender considers hardware provenance
+          information sensitive, they SHOULD use Mode 2 exclusively.
+        </t>
+      </section>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="sd-jwt-proof">
+      <name>Mode 2: SD-JWT Trust Proof</name>
+
+      <t>
+        This section defines an SD-JWT-based trust proof.  SD-JWT
+        (<xref target="RFC9901"/>) is inherently transport-independent;
+        see <xref target="other-transports"/> for applicability beyond
+        email.
+      </t>
+
+      <section anchor="sd-jwt-overview">
+        <name>Overview</name>
+        <t>
+          SD-JWT Trust Proof provides an alternative attestation
+          mechanism where a Trust Registry (an entity that has
+          previously verified the sender's hardware attestation) issues
+          a Selective Disclosure JWT <xref target="RFC9901"/>
+          containing claims about the sender's trust classification.
+          The claim structure is informed by the Entity Attestation
+          Token (EAT) model <xref target="RFC9711"/>.
+        </t>
+        <t>
+          The sender can then present this SD-JWT to email recipients
+          with only the claims it chooses to disclose.  For example,
+          a sender might prove "my hardware trust level is sovereign"
+          (indicating a genuine, non-virtual TPM was verified) without
+          revealing its identity, hardware fingerprint, or
+          registration date.  The Trust Registry issuer (iss) is
+          always visible in the SD-JWT (required for signature
+          verification), but all other claims are selectively
+          disclosable.
+        </t>
+        <t>
+          This mode requires the recipient to trust the Trust Registry's
+          signing key (obtainable via the registry's JWKS endpoint).
+          It does NOT require trust in any TPM manufacturer CA, as the
+          Trust Registry has already performed that verification.
+        </t>
+      </section>
+
+      <section anchor="sd-jwt-header">
+        <name>Header Field Definition</name>
+        <artwork type="abnf"><![CDATA[
+TPM-Trust-Proof = "TPM-Trust-Proof" ":" SP sd-jwt-compact CRLF
+
+sd-jwt-compact = sd-jwt "~" *( disclosure "~" ) kb-jwt
+
+; sd-jwt, disclosure, and kb-jwt are defined in RFC 9901
+        ]]></artwork>
+        <t>
+          The header value is a complete SD-JWT presentation as defined
+          in <xref target="RFC9901"/>, including optional disclosures
+          and a Key Binding JWT (KB-JWT).
+        </t>
+        <t>
+          The SD-JWT payload MUST include the following claims:
+        </t>
+        <dl>
+          <dt>iss</dt>
+          <dd>The Trust Registry's identifier (a URI).  Used to
+          locate the Trust Registry's JWKS for signature
+          verification.</dd>
+
+          <dt>iat</dt>
+          <dd>Issuance time as a NumericDate.</dd>
+
+          <dt>exp</dt>
+          <dd>Expiration time as a NumericDate.  MUST NOT exceed
+          7 days after iat.</dd>
+
+          <dt>_sd</dt>
+          <dd>Array of digests for selectively disclosable claims,
+          as defined in <xref target="RFC9901"/>.</dd>
+
+          <dt>cnf</dt>
+          <dd>Confirmation claim containing the sender's public key
+          (JWK format).  When the sender's key is TPM-bound, this
+          enables holder binding: the recipient can verify that the
+          presenter possesses the TPM-resident private key
+          corresponding to this public key.</dd>
+        </dl>
+        <t>
+          The following claims SHOULD be available for selective
+          disclosure (present as hashed entries in _sd):
+        </t>
+        <dl>
+          <dt>trust_tier</dt>
+          <dd>The sender's hardware trust classification.  Values
+          defined by the Trust Registry (e.g., "sovereign" for genuine
+          non-virtual TPM, "virtual" for hypervisor-provided TPM,
+          "declared" for software-only).</dd>
+
+          <dt>sub</dt>
+          <dd>The sender's identifier within the Trust Registry.</dd>
+
+          <dt>handle</dt>
+          <dd>A human-readable name for the sender, if assigned.</dd>
+
+          <dt>hsm_manufacturer</dt>
+          <dd>The TPM manufacturer code (e.g., "INTC", "AMD").</dd>
+
+          <dt>enrolled_at</dt>
+          <dd>The timestamp at which the sender enrolled with the
+          Trust Registry.</dd>
+        </dl>
+      </section>
+
+      <section anchor="sd-jwt-verification">
+        <name>Verification Algorithm</name>
+        <ol>
+          <li>
+            Parse the TPM-Trust-Proof header as an SD-JWT presentation
+            per <xref target="RFC9901"/>.
+          </li>
+          <li>
+            Extract the issuer (iss) claim from the SD-JWT payload.
+          </li>
+          <li>
+            Fetch the issuer's JWKS from the well-known endpoint
+            (e.g., {iss}/.well-known/jwks.json) or from a locally
+            cached copy.  The JWKS SHOULD be cached with a TTL of
+            at least 1 hour and at most 24 hours.
+          </li>
+          <li>
+            Verify the SD-JWT signature against the issuer's public
+            key per <xref target="RFC9901"/>.
+          </li>
+          <li>
+            Verify that exp has not passed and iat is within an
+            acceptable window.
+          </li>
+          <li>
+            For each disclosure present, verify that its hash matches
+            an entry in the _sd array.
+          </li>
+          <li>
+            If a Key Binding JWT (KB-JWT) is present and the SD-JWT
+            contains a cnf claim, verify the KB-JWT signature against
+            the cnf key.  This proves the presenter holds the private
+            key (which, if TPM-bound, proves the email was composed
+            on the enrolled hardware).
+          </li>
+          <li>
+            Extract the disclosed claims.  The result is "pass" with
+            the set of verified claims.
+          </li>
+        </ol>
+      </section>
+
+      <section anchor="sd-jwt-auth-results">
+        <name>Authentication-Results Integration</name>
+        <artwork><![CDATA[
+Authentication-Results: mx.example.com;
+  tpm-trust=pass
+    header.trust_tier=sovereign
+    header.registry=registry.example.com
+    header.kb=tpm-bound
+        ]]></artwork>
+        <dl>
+          <dt>tpm-trust</dt>
+          <dd>The method identifier.  Result values are the same as
+          for tpm-attest.</dd>
+
+          <dt>header.trust_tier</dt>
+          <dd>The disclosed trust tier value, if the sender chose to
+          reveal it.</dd>
+
+          <dt>header.registry</dt>
+          <dd>The Trust Registry identifier (from the iss claim).</dd>
+
+          <dt>header.kb</dt>
+          <dd>"tpm-bound" if the KB-JWT was verified against a
+          cnf key known to be TPM-resident.  "software" if the
+          key binding used a software key.  "none" if no KB-JWT
+          was present.</dd>
+        </dl>
+      </section>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="combined-mode">
+      <name>Combined Mode</name>
+      <t>
+        A sending agent MAY include both TPM-Attestation and
+        TPM-Trust-Proof headers in the same message.  When both
+        are present:
+      </t>
+      <ul>
+        <li>
+          Receivers that trust TPM manufacturer CAs but not the
+          Trust Registry SHOULD verify TPM-Attestation and ignore
+          TPM-Trust-Proof.
+        </li>
+        <li>
+          Receivers that trust the Trust Registry but prefer not
+          to process the full certificate chain SHOULD verify
+          TPM-Trust-Proof and MAY ignore TPM-Attestation.
+        </li>
+        <li>
+          Receivers that support both SHOULD verify both and record
+          both results in Authentication-Results.  Agreement between
+          the two mechanisms provides defence-in-depth: compromising
+          either the manufacturer CA or the Trust Registry alone is
+          insufficient to forge both attestations.
+        </li>
+      </ul>
+      <t>
+        The two mechanisms are independent.  Failure of one MUST NOT
+        cause the other to be treated as failed.
+      </t>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="sybil-resistance">
+      <name>Sybil Resistance Properties</name>
+      <t>
+        The primary security goal of this specification is Sybil
+        resistance: making it economically infeasible for an attacker
+        to create many sender identities.
+      </t>
+      <section anchor="sybil-mode1">
+        <name>Direct TPM Attestation (Mode 1)</name>
+        <t>
+          Each TPM contains exactly one EK, which produces exactly
+          one EK certificate.  The EK public key hash serves as a
+          unique hardware fingerprint.  A receiving mail server that
+          tracks these fingerprints can enforce policies such as:
+        </t>
+        <ul>
+          <li>Rate limiting per hardware fingerprint</li>
+          <li>Reputation scoring per hardware fingerprint</li>
+          <li>Blocking hardware fingerprints associated with abuse</li>
+        </ul>
+        <t>
+          An attacker attempting to evade these policies requires a
+          new physical TPM chip (minimum cost: the chip itself at
+          ~$20 plus a machine to host it at ~$200-2000), compared
+          to zero cost for creating a new software identity.
+        </t>
+      </section>
+      <section anchor="sybil-mode2">
+        <name>SD-JWT Trust Proof (Mode 2)</name>
+        <t>
+          Sybil resistance in Mode 2 depends on the Trust Registry's
+          enrollment policy.  A Trust Registry that issues trust_tier
+          values indicating hardware verification (e.g., "sovereign")
+          MUST verify hardware attestation at enrollment time and
+          MUST maintain a uniqueness registry enforcing at most one
+          identity per EK public key hash.  Such a Trust Registry
+          provides equivalent Sybil resistance to Mode 1, with the
+          additional benefit that the hardware fingerprint is not
+          revealed to email recipients.
+        </t>
+        <t>
+          Trust Registries SHOULD monitor for anomalous enrollment
+          patterns (e.g., many enrollments from a single IP range
+          or a sudden spike in enrollments from a specific
+          manufacturer CA) and SHOULD be capable of suspending
+          enrollments pending investigation.
+        </t>
+        <t>
+          A Trust Registry that does not perform hardware verification
+          (e.g., one that enrolls software-only agents) provides no
+          Sybil resistance and MUST NOT issue trust_tier values that
+          imply hardware verification.  The trust_tier claim
+          distinguishes these cases, enabling recipients to weight
+          trust appropriately.
+        </t>
+      </section>
+      <section anchor="sybil-vtpm">
+        <name>Virtual TPMs</name>
+        <t>
+          Virtual TPMs (vTPMs) provided by hypervisors (VMware, Hyper-V,
+          QEMU) have valid EK certificates signed by the hypervisor
+          vendor's CA, but the hypervisor operator can create
+          arbitrarily many vTPMs.  This weakens Sybil resistance.
+        </t>
+        <t>
+          Receiving mail servers SHOULD distinguish between physical
+          TPMs and virtual TPMs.  The EK certificate's issuer field
+          identifies the manufacturer: VMware-issued EK certificates
+          indicate a virtual TPM.  The header.hw property in
+          Authentication-Results ("tpm2.0" vs "vtpm2.0") communicates
+          this distinction.
+        </t>
+        <t>
+          Mail servers MAY apply different policies to virtual TPM
+          attestations (e.g., lower trust weighting, stricter rate
+          limits) while still recognising them as superior to
+          no attestation at all.
+        </t>
+      </section>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="interaction-dkim">
+      <name>Interaction with Existing Email Authentication</name>
+      <t>
+        The mechanisms defined in this document complement rather
+        than replace existing email authentication:
+      </t>
+      <dl>
+        <dt>SPF <xref target="RFC7208"/></dt>
+        <dd>Verifies the sending IP is authorised for the domain.
+        Orthogonal to hardware attestation.  Both SHOULD be used.</dd>
+
+        <dt>DKIM <xref target="RFC6376"/></dt>
+        <dd>Provides domain-level signing.  TPM-Attestation provides
+        hardware-level signing.  They protect different properties:
+        DKIM proves domain authorisation; TPM-Attestation proves
+        hardware identity.  Both SHOULD be used.</dd>
+
+        <dt>DMARC <xref target="RFC7489"/></dt>
+        <dd>Ties SPF and DKIM together with policy.  A future extension
+        to DMARC could incorporate TPM attestation results into the
+        policy evaluation.  This is out of scope for this document.</dd>
+
+        <dt>ARC <xref target="RFC8617"/></dt>
+        <dd>Preserves authentication results through forwarding chains.
+        ARC SHOULD preserve TPM-Attestation and TPM-Trust-Proof
+        Authentication-Results when forwarding messages.</dd>
+
+        <dt>S/MIME <xref target="RFC8551"/></dt>
+        <dd>Provides end-to-end encryption and sender signing via
+        CA-issued certificates.  S/MIME and TPM-Attestation solve
+        different problems: S/MIME proves "this email address is
+        controlled by someone who presented a valid certificate";
+        TPM-Attestation proves "this email was composed on genuine,
+        unique hardware".  They can coexist.</dd>
+      </dl>
+
+      <section anchor="multiple-headers">
+        <name>Multiple Headers and Forwarding</name>
+        <t>
+          If multiple TPM-Attestation headers are present in a
+          message (e.g., if a forwarding gateway adds its own
+          attestation), the verifier SHOULD evaluate all of them
+          independently and record each result separately in
+          Authentication-Results, using the same precedence
+          conventions as for multiple DKIM-Signature headers
+          <xref target="RFC6376"/>.
+        </t>
+        <t>
+          Mailing lists and content-modifying forwarders that alter
+          the message body will invalidate the body hash (bh) in
+          any existing TPM-Attestation header.  This is expected and
+          analogous to DKIM signature breakage through body
+          modification.  Such intermediaries SHOULD preserve the
+          original TPM-Attestation header (the verifier will record
+          "fail" due to body hash mismatch) and MAY add their own
+          TPM-Attestation header covering the modified body, if the
+          intermediary itself has TPM capability.  ARC
+          <xref target="RFC8617"/> SHOULD be used to preserve the
+          original authentication results from before the
+          modification.
+        </t>
+      </section>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="iana-considerations">
+      <name>IANA Considerations</name>
+
+      <section>
+        <name>Header Field Registration</name>
+        <t>
+          IANA is requested to register the following header fields
+          in the "Permanent Message Header Field Names" registry:
+        </t>
+        <dl>
+          <dt>TPM-Attestation</dt>
+          <dd>Applicable protocol: mail.  Status: standard.
+          Reference: this document, <xref target="header-format"/>.</dd>
+
+          <dt>TPM-Trust-Proof</dt>
+          <dd>Applicable protocol: mail.  Status: standard.
+          Reference: this document, <xref target="sd-jwt-header"/>.</dd>
+        </dl>
+      </section>
+
+      <section>
+        <name>Authentication Method Registration</name>
+        <t>
+          IANA is requested to register the following entries in the
+          "Email Authentication Methods" registry
+          <xref target="RFC8601"/>:
+        </t>
+        <dl>
+          <dt>tpm-attest</dt>
+          <dd>Definition: this document, <xref target="auth-results"/>.
+          Applicable versions: 1.</dd>
+
+          <dt>tpm-trust</dt>
+          <dd>Definition: this document, <xref target="sd-jwt-auth-results"/>.
+          Applicable versions: 1.</dd>
+        </dl>
+      </section>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="security-considerations">
+      <name>Security Considerations</name>
+
+      <section anchor="manufacturer-ca-compromise">
+        <name>Manufacturer CA Compromise</name>
+        <t>
+          If a TPM manufacturer's root CA private key is compromised,
+          an attacker could forge EK certificates and create unlimited
+          fake hardware identities.  This risk is inherent to any
+          PKI-based system and is mitigated by the same measures that
+          protect manufacturer CAs today: hardware security modules,
+          air-gapped signing ceremonies, and Certificate Transparency
+          <xref target="RFC9162"/>.
+        </t>
+        <t>
+          The SD-JWT Trust Proof (Mode 2) provides partial mitigation:
+          if the Trust Registry detects anomalous enrollment patterns
+          (e.g., thousands of enrollments from a single manufacturer
+          CA in a short period), it can suspend enrollments while the
+          compromise is investigated.  This is analogous to how
+          Certificate Transparency monitors detect mis-issued TLS
+          certificates.
+        </t>
+      </section>
+
+      <section anchor="replay-attacks">
+        <name>Replay Attacks</name>
+        <t>
+          The timestamp (ts) in the TPM-Attestation header limits the
+          replay window.  Receiving mail servers SHOULD reject
+          attestations with timestamps more than 300 seconds from the
+          current time.  Additionally, the body hash (bh) binds the
+          attestation to a specific email body, preventing a valid
+          attestation from being attached to a different message.
+        </t>
+        <t>
+          For SD-JWT Trust Proofs, the Key Binding JWT includes an
+          iat claim and MAY include an aud claim binding the
+          presentation to a specific recipient.
+        </t>
+      </section>
+
+      <section anchor="compromised-endpoints">
+        <name>Compromised Endpoints and Privilege Requirements</name>
+        <t>
+          This specification does not prevent a compromised machine
+          from sending attested email - if an attacker has full
+          control of a machine with a TPM, they can use that TPM to
+          attest.  However, this is by design: each compromised
+          machine contributes exactly one hardware identity, and
+          that identity accrues reputation (good or bad) permanently.
+          A botnet of 10,000 compromised machines yields 10,000
+          attestable identities, not the millions possible with
+          software-only identity systems.
+        </t>
+        <t>
+          Additionally, TPM operations provide a practical barrier
+          against casual malware.  Initial provisioning of an
+          Attestation Key - the one-time setup step that creates the
+          AK and certifies it against the EK - typically requires
+          elevated operating system privileges (administrator on
+          Windows via the TPM Base Services API, or root on Linux
+          via /dev/tpmrm0).  This means that unprivileged userspace
+          malware (the most common class, distributed via phishing,
+          drive-by downloads, and browser exploits) cannot provision
+          new attestation keys, even if it runs on a machine with
+          a TPM.
+        </t>
+        <t>
+          Once an AK has been provisioned, subsequent signing
+          operations (TPM2_Sign) MAY be available to unprivileged
+          processes depending on the TPM's authorization policy and
+          operating system configuration.  Implementations that wish
+          to restrict signing to authorised software SHOULD configure
+          appropriate TPM authorization policies (e.g., password or
+          policy session requirements on the AK).
+        </t>
+        <t>
+          The net effect is that hardware attestation raises the bar
+          for email abuse from "any script" to "kernel-level
+          compromise of a specific physical machine," which is a
+          substantial improvement over the status quo even if it is
+          not a complete solution.
+        </t>
+      </section>
+
+      <section anchor="hardware-attacks">
+        <name>Physical Attacks on TPMs</name>
+        <t>
+          Extracting private keys from a TPM requires physical attacks
+          such as electron microscopy, laser fault injection, or
+          side-channel analysis.  Modern TPMs include countermeasures
+          against these attacks.  The cost and expertise required for
+          successful key extraction is estimated at $50,000-$200,000
+          per chip, making it economically unviable for spam operations.
+        </t>
+        <t>
+          Even if key extraction were feasible, the extracted key
+          could only impersonate one hardware identity.  The attacker
+          would still need to extract keys from additional TPMs to
+          create additional identities.
+        </t>
+      </section>
+
+      <section anchor="virtual-tpm-risk">
+        <name>Virtual TPM Risk</name>
+        <t>
+          As noted in <xref target="sybil-vtpm"/>, virtual TPMs do not
+          provide the same Sybil resistance as physical TPMs because
+          the hypervisor operator can create arbitrary numbers of vTPMs.
+          Receiving mail servers MUST be able to distinguish virtual
+          from physical TPMs (via the manufacturer code in the EK
+          certificate) and SHOULD apply appropriate policy differences.
+        </t>
+      </section>
+
+      <section anchor="policy-abuse">
+        <name>Policy Abuse and Deanonymisation Risk</name>
+        <t>
+          Mode 1 (Direct TPM Attestation) creates a persistent,
+          globally unique hardware fingerprint that is visible to
+          every recipient.  While this is the intended mechanism for
+          Sybil resistance and reputation building, it also creates
+          risks if misused as a surveillance tool:
+        </t>
+        <ul>
+          <li>
+            Authoritarian regimes could correlate hardware
+            fingerprints across messages to track individuals or
+            organisations.
+          </li>
+          <li>
+            Employers or platforms could mandate attestation to
+            deanonymise senders who have legitimate reasons for
+            pseudonymity.
+          </li>
+          <li>
+            Receiving mail servers that log hardware fingerprints
+            create long-lived tracking databases.
+          </li>
+        </ul>
+        <t>
+          These risks are mitigated by the availability of Mode 2
+          (SD-JWT Trust Proof), which provides Sybil resistance
+          without revealing the hardware fingerprint.  Senders
+          operating in contexts where hardware fingerprint disclosure
+          is unacceptable SHOULD use Mode 2 exclusively.
+        </t>
+        <t>
+          Receiving mail servers SHOULD NOT require Mode 1 attestation
+          when Mode 2 provides sufficient trust signal for the
+          receiver's policy needs.  The Applicability section
+          (<xref target="applicability"/>) notes that this
+          specification is designed for automated senders, not
+          human users, further limiting the deanonymisation risk in
+          practice.
+        </t>
+      </section>
+
+      <section anchor="header-stripping">
+        <name>Header Stripping and Modification</name>
+        <t>
+          An intermediary mail server could strip or modify the
+          TPM-Attestation or TPM-Trust-Proof headers.  This risk is
+          identical to the risk of DKIM signature stripping and is
+          mitigated by the same mechanisms: ARC
+          <xref target="RFC8617"/> preserves authentication results
+          through forwarding chains, and DMARC policy can specify
+          handling for messages that lose authentication in transit.
+        </t>
+        <t>
+          Stripping these headers cannot cause a legitimate message
+          to appear illegitimate (it simply loses the attestation).
+          Adding forged headers is prevented by the cryptographic
+          signatures.
+        </t>
+      </section>
+    </section>
+
+  </middle>
+
+  <back>
+
+
+      <references>
+        <name>Normative References</name>
+
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.2119.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.5652.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.6376.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8174.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8601.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.9901.xml"/>
+
+      </references>
+
+      <references>
+        <name>Informative References</name>
+
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.9162.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.7208.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.7489.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.7671.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8551.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8617.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.9334.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.9711.xml"/>
+
+        <reference anchor="TCG-TPM2" target="https://trustedcomputinggroup.org/resource/tpm-library-specification/">
+          <front>
+            <title>TPM 2.0 Library Specification</title>
+            <author><organization>Trusted Computing Group</organization></author>
+            <date year="2024" month="December"/>
+          </front>
+          <seriesInfo name="TCG" value="Revision 185"/>
+        </reference>
+
+        <reference anchor="TCG-EK-PROFILE" target="https://trustedcomputinggroup.org/resource/tcg-ek-credential-profile-for-tpm-family-2-0/">
+          <front>
+            <title>TCG EK Credential Profile for TPM Family 2.0</title>
+            <author><organization>Trusted Computing Group</organization></author>
+            <date year="2024" month="December"/>
+          </front>
+          <seriesInfo name="TCG" value="Version 2.6"/>
+        </reference>
+
+      </references>
+
+ 
+
+    <!-- ====================================================== -->
+    <section anchor="appendix-economics">
+      <name>Appendix: Economics of Hardware-Based Sybil Resistance</name>
+      <t>
+        The following table compares the cost of creating N fake
+        sender identities under various authentication regimes:
+      </t>
+      <table>
+        <thead>
+          <tr>
+            <th>Authentication</th>
+            <th>Cost per Identity</th>
+            <th>Cost of 1M Identities</th>
+            <th>Reusable After Flag?</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Email-only</td>
+            <td>~$0</td>
+            <td>~$0</td>
+            <td>Yes (new address)</td>
+          </tr>
+          <tr>
+            <td>Phone-verified</td>
+            <td>~$0.01-0.10</td>
+            <td>$10K-100K</td>
+            <td>Yes (new SIM)</td>
+          </tr>
+          <tr>
+            <td>Domain + DKIM</td>
+            <td>~$1-10</td>
+            <td>$1M-10M</td>
+            <td>Yes (new domain)</td>
+          </tr>
+          <tr>
+            <td>TPM Attestation</td>
+            <td>~$500-2000</td>
+            <td>$500M-2B</td>
+            <td>No (chip is permanent)</td>
+          </tr>
+        </tbody>
+      </table>
+      <t>
+        The critical difference is the "Reusable After Flag?" column.
+        With every existing mechanism, a flagged identity can be
+        cheaply replaced.  With TPM attestation, a flagged hardware
+        identity is permanently associated with that physical chip.
+        The attacker must procure entirely new hardware.
+      </t>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="appendix-manufacturer-cas">
+      <name>Appendix: TPM Manufacturer Root CAs</name>
+      <t>
+        The following TPM manufacturers publish root CA certificates
+        that can be used to validate EK certificate chains:
+      </t>
+      <dl>
+        <dt>Intel</dt>
+        <dd>Provides EK CA certificates via a REST API.  Root CA
+        certificates available for download.
+        See <eref target="https://trustedservices.intel.com/"/>.</dd>
+
+        <dt>AMD</dt>
+        <dd>AMD Security Processor key distribution.  Root
+        certificates for fTPM EK validation.
+        See <eref target="https://download.amd.com/sev/"/>.</dd>
+
+        <dt>Infineon</dt>
+        <dd>Infineon OPTIGA TPM certificates.  Root CA available
+        via Infineon's PKI.
+        See <eref target="https://www.infineon.com/TPM"/>.</dd>
+
+        <dt>STMicroelectronics</dt>
+        <dd>Root certificates available through ST's TPM
+        documentation portal.</dd>
+
+        <dt>Nuvoton</dt>
+        <dd>Root certificates available through Nuvoton's security
+        products documentation.</dd>
+      </dl>
+      <t>
+        Receiving mail servers implementing this specification SHOULD
+        maintain a local trust store of TPM manufacturer root CAs,
+        updated periodically.  A community-maintained trust store
+        (analogous to Mozilla's CA certificate programme for TLS)
+        would benefit the ecosystem.
+      </t>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="other-transports">
+      <name>Appendix: Applicability to Other Transports</name>
+      <t>
+        The CMS attestation bundle (the "chain" value defined in
+        <xref target="header-format"/>) and the SD-JWT trust proof
+        (defined in <xref target="sd-jwt-header"/>) are self-contained
+        data structures whose verification algorithms
+        (<xref target="verification-algorithm"/> and
+        <xref target="sd-jwt-verification"/>) do not depend on email
+        semantics.  The body hash (bh) generalises to a content hash
+        over whatever payload the attestation covers.
+      </t>
+      <t>
+        Potential transport bindings include but are not limited to:
+      </t>
+      <dl>
+        <dt>HTTP</dt>
+        <dd>The CMS attestation bundle or SD-JWT trust proof could be
+        carried in HTTP request headers or in HTTP message bodies.
+        The content hash would cover the HTTP request or response
+        payload.  This binding is particularly relevant for API calls
+        by autonomous AI agents, where the receiving service benefits
+        from verifying that the request originated on attested
+        hardware.</dd>
+
+        <dt>Agent-to-Agent Protocols</dt>
+        <dd>Emerging protocols for AI agent communication - tool
+        invocation, task delegation, capability discovery - could carry
+        attestation evidence alongside each request, enabling agents
+        to verify each other's hardware trust level before exchanging
+        sensitive data or delegating privileged operations.</dd>
+
+        <dt>WebSocket and Streaming Protocols</dt>
+        <dd>Attestation evidence could be presented during connection
+        establishment (e.g., in the WebSocket upgrade request) to
+        establish hardware trust for the duration of a persistent
+        connection.</dd>
+      </dl>
+      <t>
+        Detailed specification of these bindings is out of scope for
+        this document and is deferred to future companion documents.
+      </t>
+    </section>
+
+    <section anchor="acknowledgements">
+      <name>Acknowledgements</name>
+      <t>
+        The concept of using hardware attestation for email sender
+        verification was developed in the context of a hardware
+        identity registrar for AI agents.  The authors thank the
+        Trusted Computing Group for the TPM 2.0 specification, the
+        authors of RFC 9901 (SD-JWT) for the selective disclosure
+        mechanism, and the IETF RATS and SEAT working groups for
+        establishing the remote attestation architecture that this
+        document builds upon.
+      </t>
+    </section>
+
+  </back>
+
+</rfc>

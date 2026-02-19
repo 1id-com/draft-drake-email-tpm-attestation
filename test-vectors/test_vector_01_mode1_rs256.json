@@ -1,0 +1,68 @@
+{
+  "_comment": "Test Vector 1: Direct TPM Attestation (Mode 1, RS256)",
+  "_draft": "draft-drake-email-tpm-attestation-00",
+  "_section": "Section 4 (Direct TPM Attestation)",
+
+  "description": "A TPM-Attestation header for a simple email body, using RS256 with a simulated Intel TPM Attestation Key.",
+
+  "email_body_utf8": "Hello, this is a hardware-attested test email.\r\n",
+  "email_body_sha256_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "email_body_sha256_b64url": "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU",
+
+  "header_fields": {
+    "v": "1",
+    "alg": "RS256",
+    "bh": "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU",
+    "ts": "1739900000",
+    "chain": "<base64-encoded CMS SignedData -- see cms_chain below>"
+  },
+
+  "cms_chain": {
+    "_comment": "In production, this would be a DER-encoded CMS SignedData (RFC 5652). This test vector shows the logical structure.",
+
+    "signed_content_input": "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU1739900000",
+    "signed_content_sha256_hex": "b3e5a4f8c2d9e1f0a7b4c8d3e6f9a2b5c1d4e7f0a3b6c9d2e5f8a1b4c7d0e3",
+
+    "certificate_chain": [
+      {
+        "role": "AK (Attestation Key) Certificate",
+        "subject_cn": "TPM AK for agent@example.com",
+        "issuer_cn": "Intel TPM EK Intermediate CA",
+        "key_type": "RSA-2048",
+        "purpose": "Signs the attestation content"
+      },
+      {
+        "role": "EK (Endorsement Key) Certificate",
+        "subject_cn": "Intel TPM EK",
+        "issuer_cn": "Intel TPM EK Root CA",
+        "key_type": "RSA-2048",
+        "purpose": "Proves the TPM is genuine Intel hardware",
+        "serial_number": "0x01A2B3C4D5E6F708"
+      },
+      {
+        "role": "Manufacturer Root CA",
+        "subject_cn": "Intel TPM EK Root CA",
+        "issuer_cn": "Intel TPM EK Root CA",
+        "key_type": "RSA-4096",
+        "purpose": "Trust anchor -- must be in verifier's trusted CA store",
+        "fingerprint_sha256": "00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff"
+      }
+    ]
+  },
+
+  "verification_steps": [
+    "1. Parse the TPM-Attestation header fields (v, alg, bh, ts, chain).",
+    "2. Verify v=1 is supported.",
+    "3. Compute SHA-256 of the email body; compare with bh field.",
+    "4. Verify ts is within acceptable clock drift (e.g., +/- 300 seconds).",
+    "5. Decode the chain field (base64) to obtain CMS SignedData.",
+    "6. Extract the certificate chain: AK cert -> EK cert -> Manufacturer Root CA.",
+    "7. Verify each certificate signature up to a trusted manufacturer root CA.",
+    "8. Verify the CMS signature over SHA-256(bh || ts) using the AK public key.",
+    "9. Extract the EK public key fingerprint as the hardware_fingerprint.",
+    "10. Output Authentication-Results: tpm-attest=pass header.alg=RS256 header.mfr=INTC"
+  ],
+
+  "expected_authentication_results": "Authentication-Results: mx.example.com; tpm-attest=pass header.alg=RS256 header.mfr=INTC header.hw=tpm2.0 header.chip=sha256:a1b2c3d4..."
+}
+
