@@ -925,6 +925,85 @@ Authentication-Results: mx.example.com;
     </section>
 
     <!-- ====================================================== -->
+    <section anchor="implementation-status">
+      <name>Implementation Status</name>
+      <t>
+        NOTE TO RFC EDITOR: Please remove this section before publication.
+      </t>
+      <t>
+        This section records the status of known implementations of the
+        protocol defined by this specification at the time of posting of
+        this Internet-Draft, and is based on a proposal described in
+        <xref target="RFC7942"/>.
+      </t>
+
+      <section>
+        <name>1id.com Trust Registry</name>
+        <t>
+          Organisation: 1id.com (https://1id.com)
+        </t>
+        <t>
+          Description: A working implementation of both Mode 1 (Direct
+          TPM Attestation) and Mode 2 (SD-JWT Trust Proof) as described
+          in this draft.  The implementation includes server-side EK
+          certificate chain validation against manufacturer root CAs
+          (Intel, AMD, Infineon, STMicroelectronics, Nuvoton, Qualcomm),
+          anti-Sybil enforcement via a one-EK-per-identity registry, and
+          SD-JWT trust proof issuance with selective disclosure.
+          The system also supports PIV-based (YubiKey) attestation for
+          portable hardware tokens.
+        </t>
+        <t>
+          Maturity: Beta.  Deployed in production at https://1id.com.
+        </t>
+        <t>
+          Coverage: All protocol features described in this draft are
+          implemented.
+        </t>
+        <t>
+          Contact: Christopher Drake &lt;cnd@1id.com&gt;
+        </t>
+        <t>
+          Open-source components:
+        </t>
+        <ul>
+          <li>
+            <strong>Python SDK:</strong>
+            <eref target="https://github.com/1id-com/oneid-sdk"/> --
+            Client-side enrollment and attestation library.  Published
+            to PyPI as "oneid".
+          </li>
+          <li>
+            <strong>Node.js SDK:</strong>
+            <eref target="https://github.com/1id-com/oneid-node"/> --
+            Client-side enrollment and attestation library.  Published
+            to npm as "1id".
+          </li>
+          <li>
+            <strong>TPM/PIV helper binary:</strong>
+            <eref target="https://github.com/1id-com/oneid-enroll"/> --
+            Cross-platform Go binary for TPM access (Windows TBS, Linux
+            /dev/tpmrm0), PIV smart card operations, privilege elevation,
+            and AK provisioning.
+          </li>
+          <li>
+            <strong>Internet-Draft companion repository:</strong>
+            <eref target="https://github.com/1id-com/draft-drake-email-tpm-attestation"/> --
+            Draft XML source, example verification code for both modes,
+            and test vectors.
+          </li>
+          <li>
+            <strong>TPM Manufacturer CA Trust Store:</strong>
+            <eref target="https://github.com/1id-com/tpm-manufacturer-cas"/> --
+            Community-curated collection of TPM manufacturer root CA
+            certificates for EK certificate chain validation, as
+            referenced in <xref target="appendix-manufacturer-cas"/>.
+          </li>
+        </ul>
+      </section>
+    </section>
+
+    <!-- ====================================================== -->
     <section anchor="iana-considerations">
       <name>IANA Considerations</name>
 
@@ -1171,6 +1250,7 @@ Authentication-Results: mx.example.com;
         <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8551.xml"/>
         <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8617.xml"/>
         <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.9334.xml"/>
+        <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.7942.xml"/>
         <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.9711.xml"/>
 
         <reference anchor="TCG-TPM2" target="https://trustedcomputinggroup.org/resource/tpm-library-specification/">
@@ -1283,7 +1363,9 @@ Authentication-Results: mx.example.com;
         maintain a local trust store of TPM manufacturer root CAs,
         updated periodically.  A community-maintained trust store
         (analogous to Mozilla's CA certificate programme for TLS)
-        would benefit the ecosystem.
+        would benefit the ecosystem.  An open-source trust store
+        project is available at
+        <eref target="https://github.com/1id-com/tpm-manufacturer-cas"/>.
       </t>
     </section>
 
