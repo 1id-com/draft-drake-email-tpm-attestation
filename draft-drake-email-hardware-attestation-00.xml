@@ -1,0 +1,3132 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-model href="urn:ietf:rfc:7991" type="application/relax-ng-compact-syntax"?>
+<rfc xmlns:xi="http://www.w3.org/2001/XInclude"
+     docName="draft-drake-email-hardware-attestation-00"
+     ipr="trust200902"
+     submissionType="IETF"
+     category="std"
+     consensus="true"
+     xml:lang="en"
+     version="3">
+
+  <front>
+    <title abbrev="Hardware Email Attestation">
+      Hardware Attestation for Email Sender Verification
+    </title>
+
+    <seriesInfo name="Internet-Draft"
+                value="draft-drake-email-hardware-attestation-00"/>
+
+    <author fullname="Christopher Drake" initials="C." surname="Drake">
+      <organization>1id.com</organization>
+      <address>
+        <email>cnd@1id.com</email>
+        <uri>https://1id.com</uri>
+      </address>
+    </author>
+
+    <date year="2026" month="March" day="19"/>
+
+    <area>Security</area>
+    <workgroup>Internet Engineering Task Force</workgroup>
+
+    <keyword>hardware attestation</keyword>
+    <keyword>email</keyword>
+    <keyword>TPM</keyword>
+    <keyword>PIV</keyword>
+    <keyword>Sybil</keyword>
+    <keyword>spam</keyword>
+    <keyword>agent identity</keyword>
+    <keyword>AI agents</keyword>
+    <keyword>URN</keyword>
+    <keyword>reputation</keyword>
+    <keyword>transport-independent</keyword>
+
+    <abstract>
+      <t>
+        This document defines a mechanism for automated email senders
+        (AI agents, bots, and autonomous systems) to include hardware
+        attestation evidence in message headers, enabling receiving
+        mail servers to cryptographically verify that an email was
+        composed on a device containing a genuine hardware security
+        component -- such as a Trusted Platform Module (TPM), a PIV
+        smart card (e.g., YubiKey), a virtual TPM, or a
+        software-managed key -- from a known manufacturer or issuer.
+        The verification chain runs from the email header to a
+        manufacturer's root Certificate Authority (for hardware-backed
+        attestation) or to an issuer's verification key (for
+        issuer-certified attestation), requiring no trust in any single
+        intermediary identity service.
+      </t>
+      <t>
+        Each automated sender is assigned a persistent agent identity,
+        expressed as a URN in the "aid" (Agent Identity) namespace
+        (<xref target="RFC8141"/>), enabling federated issuance by
+        multiple independent identity providers and persistent
+        reputation tracking across protocols and platforms.
+      </t>
+      <t>
+        As a companion mechanism, this document defines a
+        privacy-preserving alternative using SD-JWT (Selective
+        Disclosure JWT, <xref target="RFC9901"/>) where the sender can
+        prove specific claims about their hardware trust level without
+        revealing their hardware identity.
+      </t>
+      <t>
+        Together, these mechanisms provide both Sybil-resistant
+        authentication and a foundation for reputation building: each
+        identity requires a unique hardware security component, making
+        large-scale automated abuse economically infeasible regardless
+        of advances in artificial intelligence, while the persistent
+        hardware-anchored identity enables receiving systems to
+        accumulate trust signals over time.  Software-only agents MAY
+        participate at a lower trust tier, building reputation from an
+        initial baseline rather than from a hardware-anchored starting
+        point.
+      </t>
+      <t>
+        While this document specifies these mechanisms for email message
+        headers, the attestation formats defined herein -- both the CMS
+        attestation bundle and the SD-JWT trust proof -- are
+        self-contained, transport-independent data structures applicable
+        to HTTP headers, agent-to-agent messaging, payment
+        authorisation, and other Internet protocols.
+      </t>
+    </abstract>
+
+  </front>
+
+  <middle>
+
+    <!-- ====================================================== -->
+    <section anchor="introduction">
+      <name>Introduction</name>
+
+      <t>
+        Email authentication today relies on three complementary
+        mechanisms: SPF <xref target="RFC7208"/> verifies that the
+        transmitting mail server's IP address is authorised for the
+        domain, DKIM <xref target="RFC6376"/> provides a domain-level
+        cryptographic signature, and DMARC <xref target="RFC7489"/>
+        ties them together with policy.  These mechanisms prove that an
+        email was authorised by a domain.  They do not prove anything
+        about the agent or device that composed the message.
+      </t>
+      <t>
+        This distinction has become critical.  The rapid proliferation
+        of autonomous AI agents capable of composing human-quality text
+        has rendered content-based spam detection increasingly
+        ineffective.  An attacker can register unlimited domains,
+        configure valid SPF/DKIM/DMARC, and use AI to generate
+        messages indistinguishable from legitimate correspondence.
+        Every existing defence -- CAPTCHAs, phone verification,
+        behavioural analysis, IP reputation -- fails when the attacker
+        is an AI that can operate at scale with near-zero marginal cost.
+      </t>
+      <t>
+        The fundamental problem is that all existing sender identity
+        signals are software-based and therefore copyable at zero cost.
+        This document proposes anchoring sender identity to hardware,
+        applying the remote attestation architecture of
+        <xref target="RFC9334"/> to email: specifically, to the
+        tamper-resistant hardware security components present in
+        virtually every modern computing device.
+      </t>
+      <t>
+        A hardware security component -- whether a discrete TPM chip, a
+        firmware TPM (e.g., Intel PTT or AMD fTPM), a PIV smart card
+        (e.g., YubiKey), or a virtual TPM provided by a hypervisor --
+        contains a unique identity key burned in or generated at
+        manufacturing time, with a certificate chaining to the
+        manufacturer's root CA.  This key cannot be extracted, cloned,
+        or transferred.  By signing email content with a
+        hardware-resident key and including or linking the certificate chain in the
+        message headers, an automated sender proves that the email
+        originated on a specific, genuine piece of hardware.
+      </t>
+      <t>
+        Receiving mail servers can verify this proof by validating the
+        certificate chain against manufacturer root CAs -- the same CAs
+        they already trust for Secure Boot, platform integrity, and
+        hardware-dependent operations.  No new trust relationships are
+        required.
+      </t>
+      <t>
+        This document defines two complementary mechanisms:
+      </t>
+      <ol>
+        <li>
+          <strong>Direct Hardware Attestation</strong>
+          (<xref target="direct-attestation"/>): A CMS
+          <xref target="RFC5652"/> signed-data structure containing the
+          attestation signature and full certificate chain, carried in
+          or linked from an email header.  Verifiable directly against manufacturer
+          root CAs.  Optimised for deliverability and reputation
+          tracking.
+        </li>
+        <li>
+          <strong>SD-JWT Trust Proof</strong>
+          (<xref target="sd-jwt-proof"/>): A Selective Disclosure JWT
+          <xref target="RFC9901"/> issued by an identity provider
+          (issuer), where the sender selects which claims to reveal.
+          Optimised for privacy in contexts where revealing hardware
+          identity is undesirable.
+        </li>
+      </ol>
+      <section anchor="design-principles">
+        <name>Design Principles</name>
+        <t>
+          The following principles guide the design of this
+          specification and are referenced throughout the document:
+        </t>
+        <dl>
+          <dt>Automated-Sender Focus</dt>
+          <dd>This specification targets AI agents, bots, and
+          autonomous systems.  It is not intended for individual human
+          users (see <xref target="applicability"/>).  The privacy
+          trade-offs are acceptable for automated senders but
+          disproportionate for human correspondence.</dd>
+
+          <dt>Transport Independence</dt>
+          <dd>The attestation formats defined herein -- the CMS
+          attestation bundle and the SD-JWT trust proof -- are
+          self-contained data structures that can be carried in any
+          protocol capable of transporting octet strings.  This
+          document specifies the email transport binding;
+          <xref target="other-transports"/> discusses applicability
+          to HTTP and other protocols.</dd>
+
+          <dt>Federated Issuance</dt>
+          <dd>Any organisation that owns a DNS domain can operate as an
+          Issuer.  No central authority or coordination is required
+          beyond DNS ownership.  This mirrors the federated model of
+          email itself (see <xref target="issuer-discovery"/>).</dd>
+
+          <dt>Inclusive Trust Tiers</dt>
+          <dd>Agents with genuine hardware security components receive
+          the highest trust, but agents with virtual hardware or
+          software-only keys can still participate at lower trust
+          tiers, building reputation over time.  This inclusivity
+          avoids an all-or-nothing barrier to adoption.</dd>
+
+          <dt>Reputation as the Goal</dt>
+          <dd>Sybil resistance is a means, not an end.  The
+          persistent, hardware-anchored identities defined here exist
+          to enable receiving systems to build and query reputation
+          over time, rewarding good behaviour and flagging bad.</dd>
+        </dl>
+      </section>
+
+      <section anchor="requirements-language">
+        <name>Requirements Language</name>
+        <t>
+          The key words "MUST", "MUST NOT", "REQUIRED", "SHALL",
+          "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED",
+          "NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document
+          are to be interpreted as described in BCP 14
+          <xref target="RFC2119"/> <xref target="RFC8174"/> when,
+          and only when, they appear in all capitals, as shown here.
+        </t>
+      </section>
+
+      <section anchor="terminology">
+        <name>Terminology</name>
+        <dl>
+          <dt>Hardware Attestation Mechanism</dt>
+          <dd>A tamper-resistant hardware or firmware component capable
+          of protecting private keys and producing cryptographic
+          attestation statements verifiable to a manufacturer or
+          platform Certificate Authority.  Examples include TPM 2.0
+          devices (discrete and firmware), PIV tokens (e.g., YubiKey),
+          and virtual TPMs.  This document also accommodates
+          software-managed keys at a lower trust tier for agents that
+          lack hardware security components but wish to participate in
+          the reputation ecosystem.</dd>
+
+          <dt>TPM</dt>
+          <dd>Trusted Platform Module, as specified by the Trusted
+          Computing Group (TCG) <xref target="TCG-TPM2"/>.
+          This document assumes TPM 2.0.  A TPM may be a discrete
+          chip, a firmware implementation (Intel PTT, AMD fTPM), or a
+          virtual instance provided by a hypervisor.</dd>
+
+          <dt>EK</dt>
+          <dd>Endorsement Key.  A unique RSA or ECC key pair generated
+          inside the TPM at manufacturing time, as profiled in
+          <xref target="TCG-EK-PROFILE"/>.  The EK private key
+          never leaves the TPM.  The EK certificate is signed by the
+          chip manufacturer's CA and serves as the persistent hardware
+          identity for the device.</dd>
+
+          <dt>AK</dt>
+          <dd>Attestation Key.  A signing key created inside a hardware
+          security component, certified against the device's identity
+          key (EK for TPM, attestation certificate for PIV) to prove it
+          resides in the same device.  In this specification, the AK
+          SHOULD be created as a transient object and SHOULD NOT be
+          persisted in non-volatile storage, to avoid consuming limited
+          hardware resources.  See
+          <xref target="transient-key-model"/>.</dd>
+
+          <dt>Identity Certificate</dt>
+          <dd>The manufacturer-issued certificate that identifies a
+          specific hardware security component.  For TPMs, this is the
+          EK certificate.  For PIV tokens, this is the device
+          attestation certificate.  The SHA-256 hash of the
+          SubjectPublicKeyInfo DER encoding from this certificate
+          serves as the hardware fingerprint.  The fingerprint is
+          derived from the public key structure rather than the
+          certificate as a whole, so that the fingerprint remains
+          stable if the manufacturer reissues the certificate (e.g.,
+          to extend validity or update metadata) without changing the
+          underlying key pair.</dd>
+
+          <dt>Manufacturer CA</dt>
+          <dd>The Certificate Authority operated by the hardware
+          manufacturer (e.g., Intel, AMD, Infineon, Yubico) that signs
+          identity certificates.  Root CA certificates are publicly
+          available.</dd>
+
+          <dt>Agent Identity</dt>
+          <dd>A persistent, globally unique identifier for an
+          autonomous agent, expressed as a URN in the "aid" namespace
+          (<xref target="agent-identity-format"/>).  Agent identities
+          are assigned by issuers and are bound to specific hardware
+          via the issuer's anti-Sybil registry.</dd>
+
+          <dt>Issuer</dt>
+          <dd>An entity that verifies hardware attestation evidence,
+          maintains an anti-Sybil registry (ensuring one hardware
+          device maps to at most one identity), and issues trust
+          assertions (e.g., SD-JWTs) about enrolled agents.  An
+          Issuer is OPTIONAL for Mode 1 (Direct Hardware Attestation)
+          and REQUIRED for Mode 2 (SD-JWT Trust Proof).  See
+          <xref target="issuer-discovery"/> for discovery and the
+          federated issuance model.</dd>
+
+          <dt>Trust Tier</dt>
+          <dd>A classification of an agent's hardware trust level,
+          assigned by an Issuer.  Defined tiers include "sovereign"
+          (genuine non-virtual hardware TPM or discrete security
+          chip), "portable" (PIV smart card such as YubiKey),
+          "virtual" (hypervisor-provided virtual TPM), and "declared"
+          (software-only key, no hardware attestation).  Verifiers use
+          trust tiers to apply differentiated policy.  For identities
+          with multiple enrolled devices of different types, Issuers
+          that support multi-device identities MAY report the trust
+          tier of the device used for the most recent attestation
+          rather than a static assignment.  Verifiers SHOULD therefore
+          expect the same agent identity URN to appear with different
+          trust tier values over time.</dd>
+
+          <dt>Sybil Attack</dt>
+          <dd>An attack where a single adversary creates many
+          pseudonymous identities to subvert a reputation or
+          trust system.</dd>
+        </dl>
+      </section>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="problem-statement">
+      <name>Problem Statement</name>
+
+      <t>
+        The economic model of email spam has historically depended on
+        the near-zero cost of sending messages.  Anti-spam defences
+        have worked by raising costs (CAPTCHAs impose human attention
+        costs, IP reputation requires infrastructure investment,
+        phone verification requires SIM procurement).
+      </t>
+      <t>
+        AI agents eliminate these costs.  An AI can solve CAPTCHAs,
+        generate unique content for each message, rotate through
+        residential proxy IPs, and operate continuously without human
+        attention.  The result is that cost-based anti-spam defences
+        approach zero effectiveness as AI capabilities improve.
+      </t>
+      <t>
+        Hardware attestation re-introduces a cost floor that AI
+        cannot eliminate: each sender identity requires a physical
+        security component.  These components have real manufacturing
+        costs, exist in physical supply chains, and each contains a
+        globally unique key pair certified by the manufacturer.  An
+        attacker seeking to create N sender identities needs N
+        physical devices, each with genuine hardware -- a cost of
+        approximately $20-2000 per identity compared to approximately
+        $0 per identity with software-only approaches.
+      </t>
+      <t>
+        Furthermore, because each hardware identity is unique and
+        persistent, receiving mail servers can build per-hardware
+        reputation.  A device that sends spam is flagged permanently.
+        The attacker cannot simply create a new account -- they need
+        new physical hardware.
+      </t>
+      <t>
+        This specification also accommodates software-only agents at a
+        lower trust tier.  An agent that manages its own key pair
+        without hardware protection can still participate in the
+        reputation ecosystem, building trust over time from a lower
+        starting point.  This inclusivity recognises that not all
+        legitimate agents have access to hardware security components,
+        while maintaining clear differentiation between
+        hardware-backed and software-only trust levels.
+      </t>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="applicability">
+      <name>Applicability</name>
+      <t>
+        This specification targets authentication of automated
+        senders -- AI agents, bots, and high-volume automated
+        systems -- where Sybil resistance justifies hardware-anchored
+        identity.  The proliferation of autonomous AI agents capable
+        of generating human-quality content at scale is the primary
+        motivation.
+      </t>
+      <t>
+        This specification is NOT intended or recommended for
+        individual human users sending personal or low-volume email.
+        Human senders using consumer mail user agents (e.g., Gmail
+        web client, Outlook) face privacy risks from Mode 1 Direct
+        Attestation that are disproportionate to the benefit: the
+        hardware fingerprint uniquely identifies the sending device
+        across all messages and contexts, enabling long-term tracking
+        that exceeds current email privacy norms.  Mode 2 (SD-JWT
+        Trust Proof) mitigates this via selective disclosure but
+        requires enrollment with an Issuer, which is not a typical
+        consumer workflow.
+      </t>
+      <t>
+        Mail User Agents (MUAs) designed for interactive human use
+        MUST NOT enable Direct Hardware Attestation (Mode 1) by
+        default.  Activation MUST require explicit, per-device user
+        consent that warns of persistent cross-context tracking
+        before any attestation header is added to outgoing messages.
+        Operators of human-facing email services MAY offer hardware
+        attestation as an opt-in feature (e.g., via a browser
+        extension or MUA plugin), but MUST provide clear disclosure
+        of the linkability implications before activation.
+        Receivers SHOULD NOT penalise the absence of hardware
+        attestation from senders exhibiting human-characteristic
+        patterns (e.g., low volume, natural language variance,
+        interactive reply chains).
+      </t>
+      <t>
+        For human identity proofs in email, existing mechanisms
+        such as S/MIME <xref target="RFC8551"/> and DANE
+        <xref target="RFC7671"/> remain appropriate.
+      </t>
+      <t>
+        The attestation formats are transport-independent by design
+        (see <xref target="design-principles"/>); this document
+        specifies the email transport binding as the primary
+        application.
+      </t>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="architecture">
+      <name>Architecture</name>
+
+      <t>
+        This section defines the identity model, hardware mechanism
+        taxonomy, key lifecycle, and issuer discovery procedures that
+        underpin both attestation modes.
+      </t>
+
+      <section anchor="agent-identity-format">
+        <name>Agent Identity Format</name>
+        <t>
+          Agent identities in this specification use the URN format
+          defined in <xref target="RFC8141"/> with the "aid" (Agent
+          Identity) namespace identifier.
+        </t>
+
+        <artwork type="abnf"><![CDATA[
+aid-urn          = "urn:aid:" issuer-namespace ":" agent-id
+
+issuer-namespace = dns-label *("." dns-label)
+dns-label        = let-dig *(let-dig-hyp) let-dig / let-dig
+let-dig          = ALPHA / DIGIT
+let-dig-hyp      = ALPHA / DIGIT / "-"
+
+agent-id         = dns-label
+        ]]></artwork>
+
+        <t>
+          The issuer-namespace uses reverse DNS notation to identify
+          the organisation that enrolled the agent and verified its
+          hardware.  The agent-id is assigned by the Issuer and MUST
+          be unique within that Issuer's namespace.
+        </t>
+        <t>
+          The agent-id MUST conform to DNS label syntax
+          (<xref target="RFC1035"/> Section 2.3.1): lowercase ASCII
+          letters, digits, and hyphens, not beginning or ending with a
+          hyphen, maximum 63 octets.  Internationalised agent
+          identifiers MUST use the "xn--" ACE prefix encoding defined
+          in <xref target="RFC5891"/>.  Underscores MUST NOT appear
+          in the agent-id.
+        </t>
+        <t>
+          Examples:
+        </t>
+        <ul>
+          <li><tt>urn:aid:com.1id:1id-ty62muvf</tt></li>
+          <li><tt>urn:aid:com.anthropic:claude-prod-7x9k</tt></li>
+          <li><tt>urn:aid:io.openai:gpt4-instance-42</tt></li>
+        </ul>
+        <t>
+          URN equivalence follows <xref target="RFC8141"/>
+          Section 3: the "urn" scheme and "aid" NID are
+          case-insensitive; the issuer-namespace and agent-id are
+          case-sensitive (and MUST be lowercase).
+        </t>
+        <t>
+          Agent identities are persistent by design: an Issuer MUST
+          NOT reassign an agent-id to a different entity, even after
+          the original identity is revoked or expired.  This
+          persistence is essential for reputation systems that
+          accumulate trust signals over the lifetime of an identity.
+          See <xref target="identity-hardware-cardinality"/> for the
+          rules governing the relationship between agent identities
+          and hardware devices.
+        </t>
+      </section>
+
+      <section anchor="identity-hardware-cardinality">
+        <name>Identity-to-Hardware Cardinality</name>
+        <t>
+          The agent identity URN (aid) is the primary, stable
+          identifier for reputation tracking.  The hardware
+          fingerprint is an implementation detail that anchors the
+          identity to physical hardware.  The relationship between
+          these two identifiers is governed by the following rules:
+        </t>
+        <dl>
+          <dt>Many hardware devices MAY back one agent identity</dt>
+          <dd><t>An Issuer MAY bind additional hardware devices to an
+          existing agent identity over time, to support legitimate
+          hardware migration (e.g., retiring old servers, replacing
+          failed TPMs), secure backup and recovery (e.g., a YubiKey
+          stored in a safe), or adding capacity for a high-volume
+          sending agent.  This does not amplify reputation: a single
+          agent identity has a single reputation regardless of how
+          many devices back it.  If the identity is flagged for
+          abuse, all devices associated with it are equally
+          affected.  The Issuer SHOULD require the agent to prove
+          control of the existing identity (e.g., by signing with
+          the previously enrolled hardware) before accepting a new
+          device.  Verifiers that track both the aid and the
+          hardware fingerprint SHOULD expect that a given aid may
+          appear with different hardware fingerprints over its
+          lifetime.</t>
+          <t>Each device bound to an agent identity is permanently
+          associated with that identity.  An Issuer MAY disable a
+          device (preventing it from producing valid attestations)
+          but MUST NOT remove the device-to-identity binding.  A
+          disabled device remains counted against the identity and
+          MUST NOT be re-enrolled under any other agent-id, even
+          after disablement.  This permanence prevents reputation
+          laundering via device recycling.</t>
+          <t>An Issuer MUST enforce trust tier compatibility when
+          binding additional devices: all hardware devices backing a
+          single agent identity MUST be of comparable trust tier.
+          Specifically, sovereign-tier hardware (typ=TPM) and
+          portable-tier hardware (typ=PIV) are compatible and MAY
+          back the same identity.  Virtual-tier hardware (typ=VRT)
+          MAY back the same identity as other virtual-tier devices
+          but MUST NOT be mixed with sovereign or portable
+          hardware.  Declared-tier keys (typ=SFT) MUST NOT be bound
+          to an identity that has any hardware-backed device.  This
+          constraint prevents an identity from simultaneously
+          claiming hardware-anchored trust and relying on
+          unprotected software keys.</t>
+          <t>When an identity has multiple devices of compatible but
+          different types (e.g., one sovereign TPM and one portable
+          PIV), the trust_tier disclosed in attestation tokens
+          (Mode 2) or the typ parameter in attestation headers
+          (Mode 1) reflects the specific device used for that
+          attestation, not a static property of the identity.
+          Verifiers SHOULD therefore expect the same agent identity
+          URN to appear with different trust tier values across
+          different messages.</t></dd>
+
+          <dt>One hardware device MUST NOT back multiple agent
+          identities from the same Issuer</dt>
+          <dd>An Issuer MUST NOT enroll the same hardware device
+          (identified by its identity certificate public key hash)
+          under more than one agent-id within that Issuer's
+          namespace.  This is the fundamental anti-Sybil invariant:
+          it ensures that creating N agent identities requires N
+          distinct hardware devices.  Issuers MUST maintain a
+          registry mapping identity certificate public key hashes to
+          agent-ids and MUST reject enrollment attempts that would
+          violate this constraint.  This binding is permanent: once a
+          hardware device has been bound to an agent identity, it
+          MUST NOT be reassigned to a different agent identity, even
+          if it is later disabled or removed from the original
+          identity.  An Issuer MAY disable a hardware device
+          (preventing it from being used for attestation) but MUST
+          NOT permit that device to be enrolled under any other
+          agent-id.  This prevents reputation laundering attacks where
+          a flagged device is removed from a bad-reputation identity
+          and enrolled under a fresh identity.</dd>
+
+          <dt>Cross-Issuer binding is permitted</dt>
+          <dd>A single hardware device MAY be enrolled with multiple
+          independent Issuers, each assigning its own agent-id.
+          This is by design: Issuers are independent authorities, and
+          the anti-Sybil invariant is scoped to a single Issuer's
+          namespace.  Cross-Issuer duplication is trivially
+          detectable by any verifier that tracks hardware
+          fingerprints: the same fingerprint appearing under
+          multiple agent identities from different Issuers reveals
+          the shared hardware.  Verifiers MAY apply policy based on
+          this signal (e.g., treating the device as lower trust if
+          it maintains identities with many Issuers
+          simultaneously).</dd>
+        </dl>
+        <t>
+          Because the agent identity is the stable reputation anchor,
+          verifiers SHOULD use the aid URN as the primary key for
+          reputation systems.  The hardware fingerprint serves as a
+          secondary signal: it provides Sybil resistance at the
+          hardware layer and enables reputation tracking for agents
+          that do not present an aid.
+        </t>
+      </section>
+
+      <section anchor="hw-mechanisms">
+        <name>Hardware Attestation Mechanisms</name>
+        <t>
+          This specification supports multiple hardware security
+          technologies through a common abstraction.  Each mechanism
+          provides an identity certificate (signed by the manufacturer)
+          and a signing capability (used for per-message attestation).
+          The hardware type is declared in the attestation header via
+          the "typ" parameter.
+        </t>
+        <table>
+          <thead>
+            <tr>
+              <th>typ value</th>
+              <th>Technology</th>
+              <th>Identity Certificate</th>
+              <th>Trust Tier</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>TPM</td>
+              <td>TPM 2.0 (discrete or firmware)</td>
+              <td>EK Certificate</td>
+              <td>sovereign</td>
+            </tr>
+            <tr>
+              <td>PIV</td>
+              <td>PIV smart card (e.g., YubiKey)</td>
+              <td>Device Attestation Certificate</td>
+              <td>portable</td>
+            </tr>
+            <tr>
+              <td>VRT</td>
+              <td>Virtual TPM (hypervisor-provided)</td>
+              <td>vTPM EK Certificate</td>
+              <td>virtual</td>
+            </tr>
+            <tr>
+              <td>SFT</td>
+              <td>Software-managed key</td>
+              <td>Issuer-signed certificate</td>
+              <td>declared</td>
+            </tr>
+          </tbody>
+        </table>
+        <t>
+          Additional hardware types MAY be defined in future
+          specifications by registering new "typ" values with IANA
+          (see <xref target="iana-considerations"/>).
+        </t>
+        <t>
+          For TPM-based attestation (typ=TPM), the identity
+          certificate is the Endorsement Key (EK) certificate,
+          provisioned at manufacturing time and stored in the TPM's
+          non-volatile memory.  The EK certificate chains to the TPM
+          manufacturer's root CA (e.g., Intel, AMD, Infineon).
+        </t>
+        <t>
+          For PIV-based attestation (typ=PIV), the identity
+          certificate is the device attestation certificate issued by
+          the token manufacturer (e.g., Yubico).  The signing key is
+          a PIV authentication key resident on the token.
+        </t>
+        <t>
+          For virtual TPM attestation (typ=VRT), the identity
+          certificate is the vTPM's EK certificate, signed by the
+          hypervisor vendor's CA (e.g., VMware, Microsoft).  Verifiers
+          MUST distinguish virtual from physical hardware; see
+          <xref target="sybil-vtpm"/> for Sybil resistance
+          implications.
+        </t>
+        <t>
+          For software-only attestation (typ=SFT), the signing key is
+          a software-managed key pair with no hardware protection.
+          The identity certificate is issued by the Issuer at
+          enrollment time.  Software-only attestation provides no
+          hardware-based Sybil resistance but allows agents to
+          participate in the reputation ecosystem at a lower trust
+          tier.  A legitimate agent that protects its key and
+          builds reputation over time can achieve meaningful trust
+          even without hardware backing.
+        </t>
+      </section>
+
+      <section anchor="transient-key-model">
+        <name>Transient Key Model</name>
+        <t>
+          For TPM-based attestation, this specification RECOMMENDS a
+          transient key model in which the Attestation Key (AK) is
+          created as a transient TPM object (via TPM2_CreatePrimary)
+          and is NOT persisted in the TPM's non-volatile (NV) storage.
+          This avoids consuming limited NV slots, which are a scarce
+          resource on most TPMs (typically 3-7 loaded objects at once).
+        </t>
+        <t>
+          The transient key lifecycle is:
+        </t>
+        <ol>
+          <li>
+            <strong>Read EK certificate</strong> from the TPM's NV
+            storage (index 0x01C00002 for RSA EK).  This is a
+            read-only operation.  The EK certificate MAY be cached
+            indefinitely as it does not change.
+          </li>
+          <li>
+            <strong>Create transient AK</strong> via
+            TPM2_CreatePrimary under the endorsement hierarchy with a
+            fixed template.  Because the template and the Endorsement
+            Primary Seed (EPS) are constant, this deterministically
+            produces the same key on every invocation.
+          </li>
+          <li>
+            <strong>Binding verification</strong> (one-time, during
+            enrollment with an Issuer): The Issuer creates a
+            credential challenge (TPM2_MakeCredential) encrypted to
+            the EK; the agent decrypts it (TPM2_ActivateCredential),
+            proving the AK resides in the same TPM as the EK.  The
+            resulting AK certificate is stored client-side (outside the
+            TPM) and reused across signing operations.
+          </li>
+          <li>
+            <strong>Sign</strong> the attestation content with the
+            transient AK (TPM2_Sign).
+          </li>
+          <li>
+            <strong>Flush</strong> the transient AK handle
+            (TPM2_FlushContext) to free the object slot.
+          </li>
+        </ol>
+        <t>
+          Implementations SHOULD flush transient objects immediately
+          after use.  If TPM2_CreatePrimary returns
+          TPM_RC_OBJECT_MEMORY (0x0902), the implementation MUST flush
+          existing transient handles and retry.
+        </t>
+        <t>
+          The EK certificate is the persistent hardware identifier.
+          The AK is ephemeral infrastructure -- it exists only long
+          enough to produce a signature, then is discarded.  No data
+          is written to the TPM's non-volatile memory at any point in
+          this protocol.
+        </t>
+        <t>
+          The transient AK is deterministic within a given Endorsement
+          Primary Seed (EPS) epoch.  The EPS is re-randomised when the
+          TPM is cleared (TPM2_Clear) or reset to factory defaults.
+          After such an event, the AK public key changes and the agent
+          MUST re-enroll with its Issuer to establish a new AK-to-EK
+          binding.  The EK certificate remains constant across TPM
+          clears, so the hardware identity persists even though the AK
+          changes.
+        </t>
+        <t>
+          Note: On some platform configurations (particularly Windows
+          with default TPM Base Services policy), reading the EK
+          certificate from NV storage may require a one-time operating
+          system configuration change or elevated access during initial
+          enrollment.  Once the EK certificate has been read and cached
+          client-side, subsequent attestation operations do not require
+          elevation.  Implementations that cannot read the EK
+          certificate directly MAY derive the EK public key via
+          TPM2_CreatePrimary with the TCG EK template and use the
+          resulting public key hash as the hardware fingerprint;
+          verifiers can then query manufacturer APIs (e.g., Intel
+          Trusted Services) to obtain the full certificate if needed
+          for chain validation.  Alternatively, the Issuer can perform
+          EK certificate extraction during enrollment and include it in
+          the AK certificate it issues.
+        </t>
+      </section>
+
+      <section anchor="issuer-discovery">
+        <name>Issuer Discovery</name>
+        <t>
+          When a verifier encounters an agent identity URN, it extracts
+          the Issuer's domain from the issuer-namespace by reversing
+          the dot-separated labels.
+        </t>
+        <artwork><![CDATA[
+Example:
+  URN: urn:aid:com.1id:1id-ty62muvf
+  issuer-namespace: com.1id
+  Issuer domain: 1id.com
+        ]]></artwork>
+        <t>
+          The verifier discovers the Issuer's signing key and
+          endpoints through the mechanisms described below.  The
+          DNS-based method is RECOMMENDED for email because it
+          piggybacks on infrastructure that mail servers already
+          query for DKIM, SPF, and DMARC, requires no outbound
+          HTTPS connections during verification, and inherits the
+          same domain-ownership guarantees that protect existing
+          email authentication.  Any organisation that owns a DNS
+          domain can operate as an Issuer by implementing the
+          enrollment protocol, publishing a signing key (via DNS
+          and/or JWKS), and maintaining an anti-Sybil registry.
+          No central registration or coordination is required
+          beyond DNS ownership.
+        </t>
+
+        <section anchor="issuer-key-dns">
+          <name>DNS-Published Issuer Key</name>
+          <t>
+            Issuers SHOULD publish their SD-JWT signing key as a DNS
+            TXT record at the well-known name
+            <tt>_hwattest.{domain}</tt>, following the same
+            pattern as DKIM key records
+            (<xref target="RFC6376"/> Section 3.6).
+          </t>
+          <artwork><![CDATA[
+Example DNS TXT record:
+
+  _hwattest.1id.com.  IN TXT (
+    "v=hwattest1; alg=ES256; "
+    "p=MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE..."
+  )
+          ]]></artwork>
+          <t>
+            The TXT record value uses a tag=value format with
+            semicolon separators:
+          </t>
+          <dl>
+            <dt>v</dt>
+            <dd>REQUIRED.  Version.  MUST be "hwattest1".</dd>
+
+            <dt>alg</dt>
+            <dd>REQUIRED.  The JWS algorithm used by the Issuer
+            to sign SD-JWTs (e.g., "ES256", "PS256").</dd>
+
+            <dt>p</dt>
+            <dd>REQUIRED.  The Issuer's public key, base64-encoded.
+            For EC keys, this is the SubjectPublicKeyInfo DER
+            encoding.  For RSA keys, this is the PKCS#1 DER
+            encoding.  The format matches the DKIM p= tag
+            (<xref target="RFC6376"/> Section 3.6.1).</dd>
+
+            <dt>kid</dt>
+            <dd>OPTIONAL.  Key identifier matching the kid in the
+            SD-JWT header.  When present, verifiers use this to
+            select the correct key if the Issuer rotates keys.</dd>
+
+            <dt>t</dt>
+            <dd>OPTIONAL.  Key type: "active" (default) or
+            "revoked".  When set to "revoked", verifiers MUST
+            reject SD-JWTs signed with this key.  This allows
+            Issuers to revoke a compromised key via a DNS update
+            without waiting for TTL expiry of cached JWKS
+            responses.</dd>
+          </dl>
+          <t>
+            Verifiers MUST query this DNS record before falling
+            back to HTTPS-based discovery.  The DNS TTL controls
+            caching; Issuers SHOULD set a TTL between 3600 and
+            86400 seconds (1 to 24 hours).  For key rotation, the
+            Issuer publishes the new key in DNS, waits for the old
+            TTL to expire, then marks the old key as revoked.
+          </t>
+          <t>
+            This approach provides several security advantages for
+            email verification:
+          </t>
+          <ul>
+            <li>No outbound HTTPS connections during mail
+            processing, eliminating DDoS amplification and SSRF
+            risks that external URI fetches would introduce.</li>
+            <li>Domain ownership is proven by DNS control, the
+            same trust anchor used by DKIM and SPF.  A forged
+            Hardware-Trust-Proof header claiming an Issuer domain
+            the attacker does not control will fail verification
+            because the attacker cannot publish a matching DNS
+            key record.</li>
+            <li>DNS infrastructure is already hardened against
+            abuse by mail operators (rate limiting, caching,
+            DNSSEC).</li>
+            <li>Key revocation propagates through DNS TTL expiry,
+            providing a well-understood and operationally familiar
+            mechanism.</li>
+          </ul>
+        </section>
+
+        <section anchor="issuer-https-discovery">
+          <name>HTTPS-Based Discovery (Fallback)</name>
+          <t>
+            When no DNS TXT record is found at
+            <tt>_hwattest.{domain}</tt>, or when the verifier
+            operates in a non-email context (e.g., HTTP API
+            verification), the verifier MAY discover the Issuer's
+            key via HTTPS:
+          </t>
+          <dl>
+            <dt>OIDC Discovery</dt>
+            <dd><tt>https://{domain}/.well-known/openid-configuration</tt>
+            - Standard OpenID Connect discovery document containing
+            the JWKS URI for SD-JWT signature verification.</dd>
+
+            <dt>Issuer Metadata (OPTIONAL)</dt>
+            <dd><tt>https://{domain}/.well-known/aid-issuer.json</tt>
+            - JSON document describing the Issuer's capabilities,
+            supported trust tiers, enrollment endpoint, and
+            anti-Sybil policy.</dd>
+
+            <dt>Manufacturer CA Trust Store (OPTIONAL)</dt>
+            <dd><tt>https://{domain}/.well-known/hw-manufacturer-cas.pem</tt>
+            - PEM-encoded bundle of hardware manufacturer root CA
+            certificates that this Issuer accepts during enrollment.
+            Verifiers performing Mode 1 verification SHOULD maintain
+            their own trust store rather than relying on this
+            endpoint.</dd>
+          </dl>
+          <t>
+            Verifiers using HTTPS-based discovery SHOULD cache the
+            JWKS with a TTL of at least 1 hour and at most 24 hours.
+            Verifiers MUST NOT follow redirects to domains other
+            than the Issuer's domain, to prevent open-redirect
+            attacks.
+          </t>
+        </section>
+      </section>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="direct-attestation">
+      <name>Mode 1: Direct Hardware Attestation</name>
+
+      <t>
+        This section defines a CMS-based attestation bundle containing
+        a hardware-anchored signature and its full certificate chain,
+        presented here as an email header field.  The CMS structure
+        is transport-independent (see
+        <xref target="design-principles"/>).
+      </t>
+
+      <section anchor="attestation-chain">
+        <name>Attestation Evidence Structure</name>
+        <t>
+          The attestation evidence consists of the following
+          certificates, ordered from leaf to root:
+        </t>
+        <ol>
+          <li>
+            <strong>AK Certificate:</strong> Issued by an Issuer after
+            successful completion of the binding verification protocol
+            (e.g., TPM2_MakeCredential / TPM2_ActivateCredential for
+            TPMs, or manufacturer attestation verification for PIV
+            tokens).  Binds the AK public key to the hardware
+            device identified by the identity certificate.  If no
+            Issuer enrollment has been performed, the AK certificate
+            MAY be self-signed; verifiers SHOULD treat self-signed AK
+            certificates as lower trust than Issuer-certified ones.
+          </li>
+          <li>
+            <strong>Identity Certificate:</strong> Issued by the
+            hardware manufacturer at fabrication time.  For TPMs, this
+            is the EK certificate.  For PIV tokens, this is the device
+            attestation certificate.  Contains the hardware identity
+            public key, manufacturer identity, and device information.
+            Signed by the manufacturer's intermediate CA.
+          </li>
+          <li>
+            <strong>Manufacturer Intermediate CA Certificate(s):</strong>
+            Zero or more intermediate CA certificates forming the chain
+            between the identity certificate issuer and the
+            manufacturer root.
+          </li>
+          <li>
+            <strong>Manufacturer Root CA Certificate:</strong> The trust
+            anchor.  This certificate SHOULD already be present in the
+            verifier's trust store.  Major manufacturer root CAs are
+            published at well-known URLs (e.g., Intel's Trusted
+            Services API, AMD's Key Distribution Server, Yubico's
+            attestation CA).
+          </li>
+        </ol>
+      </section>
+
+      <section anchor="header-format">
+        <name>Header Field Definition</name>
+        <t>
+          This document defines the "Hardware-Attestation" header
+          field for use in email messages.
+        </t>
+
+        <artwork type="abnf"><![CDATA[
+Hardware-Attestation = "Hardware-Attestation" ":" SP hw-attest-value
+                       CRLF
+
+hw-attest-value = hw-version ";" SP
+                  hw-type ";" SP
+                  hw-algorithm ";" SP
+                  hw-signed-hdrs ";" SP
+                  hw-body-hash ";" SP
+                  hw-timestamp ";" SP
+                  hw-chain
+                  [";" SP hw-aid]
+
+hw-version     = "v" "=" "1"
+hw-type        = "typ" "=" ("TPM" / "PIV" / "VRT" / "SFT")
+hw-algorithm   = "alg" "=" ("RS256" / "ES256" / "PS256")
+hw-signed-hdrs = "h" "=" hdr-name *(":" hdr-name)
+hw-body-hash   = "bh" "=" base64url
+hw-timestamp   = "ts" "=" 1*DIGIT
+hw-chain       = "chain" "=" base64
+hw-aid         = "aid" "=" aid-urn
+
+hdr-name       = field-name  ; as defined in RFC 5322
+base64url      = *( ALPHA / DIGIT / "-" / "_" )
+                              ; URL-safe base64 per RFC 4648 Sec 5
+base64         = *( ALPHA / DIGIT / "+" / "/" / "=" )
+                              ; standard base64 per RFC 4648 Sec 4
+        ]]></artwork>
+        <t>
+          The base64url and base64 encodings follow
+          <xref target="RFC4648"/>.
+        </t>
+
+        <t>Where:</t>
+        <dl>
+          <dt>v</dt>
+          <dd>Protocol version.  MUST be "1" for this specification.</dd>
+
+          <dt>typ</dt>
+          <dd>The hardware attestation mechanism type.  "TPM" for
+          Trusted Platform Module (discrete or firmware), "PIV" for
+          Personal Identity Verification smart card, "VRT" for virtual
+          TPM, "SFT" for software-managed key.  Additional values MAY
+          be registered with IANA.</dd>
+
+          <dt>alg</dt>
+          <dd>The signature algorithm used by the AK.  MUST be one of
+          RS256 (RSASSA-PKCS1-v1_5 with SHA-256), ES256 (ECDSA with
+          P-256 and SHA-256), or PS256 (RSASSA-PSS with SHA-256).
+          RS256 is included for compatibility with existing TPM 2.0
+          deployments where RSA keys are pre-provisioned; new
+          deployments SHOULD prefer PS256 (for RSA) or ES256 (for
+          ECC).  ES256 is RECOMMENDED for PIV tokens.  Additional
+          algorithms MAY be registered with IANA (see
+          <xref target="iana-considerations"/>); future versions of
+          this specification MAY deprecate algorithms by updating
+          the IANA registry.  Verifiers MUST reject algorithms not
+          listed in the registry.  If SHA-256 is deprecated in the
+          future, a new protocol version (v=2) would be required,
+          as the hash algorithm is embedded in the attestation-digest
+          construction.</dd>
+
+          <dt>h</dt>
+          <dd>A colon-separated list of header field names included in
+          the h-hash computation, following the same conventions as
+          the DKIM h= tag (<xref target="RFC6376"/> Section 3.5).
+          The listed headers are canonicalised and concatenated (in
+          the order listed) before hashing.  Signers MUST include at
+          minimum: From, To, Subject, Date, and Message-ID.  Signers
+          SHOULD also include any Hardware-Trust-Proof header present
+          in the same message.  The Hardware-Attestation header itself
+          is always implicitly appended last (with the chain
+          parameter value replaced by the empty string during
+          computation, following the same self-inclusion technique as
+          DKIM-Signature per <xref target="RFC6376"/> Section 3.7).
+          The Hardware-Attestation header MUST NOT appear in the h=
+          list.  Because the header is included in h-hash, all of
+          its parameters (including aid, typ, alg, bh, ts) are
+          cryptographically bound to the signature.</dd>
+
+          <dt>bh</dt>
+          <dd>The base64url-encoded SHA-256 hash of the canonicalised
+          email body, computed using the same canonicalisation algorithm
+          as DKIM simple body canonicalisation
+          <xref target="RFC6376" section="3.4.3"/>.</dd>
+
+          <dt>ts</dt>
+          <dd>Unix timestamp (seconds since 1970-01-01T00:00:00Z)
+          at which the attestation signature was created.</dd>
+
+          <dt>chain</dt>
+          <dd><t>A base64-encoded CMS SignedData structure
+          (<xref target="RFC5652"/>), using the SignedData content
+          type (OID 1.2.840.113549.1.7.2).  The encapContentInfo
+          MUST be absent (detached signature).  The chain parameter
+          MUST be present; the full CMS structure is always inline
+          in the header, ensuring that verifiers can perform
+          cryptographic validation without any external fetches.
+          The CMS structure contains: (a) the AK signature over
+          the attestation digest (see below); (b) the AK
+          certificate (Issuer-certified or self-signed); (c) the
+          identity certificate (EK certificate for TPM, device
+          attestation certificate for PIV); and (d) any
+          intermediate CA certificates.</t>
+          <t>The signed content is the SHA-256 hash of the
+          concatenation of three fixed-length fields:</t>
+          <artwork><![CDATA[
+  attestation-input = h-hash || bh-raw || ts-bytes
+  attestation-digest = SHA-256(attestation-input)
+  signature = Sign(AK, attestation-digest)
+
+  h-hash   = SHA-256(canonicalised-headers)  ; 32 bytes
+  bh-raw   = SHA-256(canonicalised body)     ; 32 bytes
+  ts-bytes = big-endian uint64(ts)           ; 8 bytes
+          ]]></artwork>
+          <t>The attestation-input is exactly 72 bytes (32 + 32 + 8).
+          The canonicalised-headers input to h-hash is computed as
+          follows: take the headers named in the h= parameter, in
+          the order listed, each canonicalised per DKIM relaxed
+          header canonicalisation (<xref target="RFC6376"/>
+          Section 3.4.2) and terminated with CRLF.  Then append
+          the Hardware-Attestation header itself, canonicalised
+          the same way, with the chain parameter value replaced
+          by the empty string, and without a trailing CRLF
+          (matching the DKIM-Signature self-inclusion convention
+          in <xref target="RFC6376"/> Section 3.7).  Because the
+          Hardware-Attestation header contains the aid, typ, alg,
+          bh, and ts parameters in their wire format, all of
+          these values are cryptographically bound by h-hash.
+          In particular, the aid parameter cannot be modified
+          after signing without changing h-hash and therefore
+          invalidating the signature.</t></dd>
+
+          <dt>aid</dt>
+          <dd>OPTIONAL.  The sender's agent identity URN as defined
+          in <xref target="agent-identity-format"/>.  Because the
+          Hardware-Attestation header is implicitly included in the
+          canonicalised-headers input to h-hash (see the h and chain
+          parameters above), the aid value is cryptographically
+          bound to the signature.  Substitution or modification of
+          the aid after signing invalidates the attestation.  The
+          agent identity URN is the RECOMMENDED primary key for
+          reputation tracking; verifiers SHOULD prefer aid over the
+          hardware fingerprint when both are available, as the agent
+          identity persists across hardware migrations (see
+          <xref target="identity-hardware-cardinality"/>).  When aid
+          is absent, the verifier can still validate the hardware
+          certificate chain but has only the hardware fingerprint
+          for reputation tracking.</dd>
+        </dl>
+      </section>
+
+      <section anchor="verification-algorithm">
+        <name>Verification Algorithm</name>
+        <t>
+          A receiving mail server that supports this specification
+          MUST perform the following steps when a Hardware-Attestation
+          header is present:
+        </t>
+        <ol>
+          <li>
+            Parse the Hardware-Attestation header field and extract v,
+            typ, alg, h, bh, ts, chain, and (if present) aid.
+            If parsing fails, the result is "none" (header malformed).
+          </li>
+          <li>
+            Verify that v equals "1".  If not, the result is "none"
+            (unsupported version).
+          </li>
+          <li>
+            Verify that h lists at minimum From, To, Subject, Date,
+            and Message-ID.  Compute h-hash as defined in
+            <xref target="header-format"/>: canonicalise the listed
+            headers using DKIM relaxed header canonicalisation
+            (<xref target="RFC6376"/> Section 3.4.2), each
+            terminated with CRLF, then append the
+            Hardware-Attestation header itself (canonicalised the
+            same way, with the chain value replaced by the empty
+            string, without a trailing CRLF), and compute SHA-256
+            over the result.
+          </li>
+          <li>
+            Compute the SHA-256 hash of the canonicalised email body
+            using DKIM simple body canonicalisation
+            (<xref target="RFC6376"/> Section 3.4.3).  Base64url-decode
+            the bh parameter value and compare the resulting octets
+            with the computed hash (exact byte-for-byte comparison).
+            If they differ, the result is "fail" (body modified).
+          </li>
+          <li>
+            Verify that ts is within an acceptable window of the
+            current time.  A window of 300 seconds (5 minutes) is
+            RECOMMENDED for direct SMTP delivery.  Verifiers SHOULD
+            allow a wider window (up to 3600 seconds / 1 hour) for
+            messages that have passed through intermediate MTAs, as
+            indicated by Received headers or queue delays.  If ts is
+            outside the acceptable window, the result is "fail"
+            (timestamp expired).
+          </li>
+          <li>
+            Decode the base64 chain parameter to obtain the CMS
+            SignedData structure.  Parse the CMS SignedData structure
+            and extract the signer certificate (AK certificate) and
+            the certificate chain.
+          </li>
+          <li>
+            <t>Validate the certificate chain:</t>
+            <ol type="a">
+              <li>The AK certificate MUST contain evidence binding the
+              AK public key to the identity certificate's device.
+              For TPM-based attestation, this is a TPM2_Certify
+              structure (either in an X.509 extension or as the
+              certificate's subject public key attestation).  For
+              PIV-based attestation, this is the manufacturer's
+              attestation certificate chain (e.g., Yubico's
+              attestation certificate that certifies the key was
+              generated on the device).  For Issuer-certified AK
+              certificates, the Issuer verified this binding during
+              enrollment and the AK certificate is signed by the
+              Issuer's CA.  For self-signed AK certificates, the
+              verifier SHOULD treat the binding as unverified and
+              reduce trust accordingly.</li>
+              <li>The identity certificate MUST chain to a
+              manufacturer intermediate CA certificate.</li>
+              <li>The manufacturer intermediate CA MUST chain to a
+              manufacturer root CA present in the verifier's
+              hardware manufacturer CA trust store.</li>
+            </ol>
+            <t>If chain validation fails, the result is "fail"
+            (chain invalid).</t>
+          </li>
+          <li>
+            Reconstruct the attestation-digest as defined in
+            <xref target="header-format"/>: concatenate h-hash
+            (32 bytes), bh-raw (32 bytes, the raw SHA-256 digest
+            of the canonicalised body), and ts-bytes (8 bytes,
+            big-endian uint64 of ts), then compute SHA-256 over
+            the 72-byte result.  Verify the CMS signature over
+            this digest using the AK public key and the algorithm
+            specified by alg.  If signature verification fails,
+            the result is "fail" (bad signature).  Because the
+            Hardware-Attestation header (including the aid
+            parameter) is included in the canonicalised-headers
+            input to h-hash, any modification to any header
+            parameter after signing causes verification to fail.
+          </li>
+          <li>
+            <t>If all checks pass, the result is "pass".  The verifier
+            MAY extract the following information from the certificate
+            chain and header:</t>
+            <ul>
+              <li>Hardware type (from typ parameter)</li>
+              <li>Hardware manufacturer (from identity certificate
+              issuer)</li>
+              <li>Device model or family (from identity certificate
+              extensions)</li>
+              <li>Hardware fingerprint: SHA-256 hash of the identity
+              certificate's public key</li>
+              <li>Agent identity URN (from aid parameter, if
+              present)</li>
+            </ul>
+          </li>
+          <li>
+            <t>If aid is present, the verifier MAY additionally:</t>
+            <ol type="a">
+              <li>Discover the Issuer's endpoints per
+              <xref target="issuer-discovery"/>.</li>
+              <li>Query reputation services using the aid URN as
+              a lookup key.</li>
+              <li>Apply differentiated policy based on the agent's
+              trust tier and reputation history.</li>
+            </ol>
+          </li>
+        </ol>
+      </section>
+
+      <section anchor="auth-results">
+        <name>Authentication-Results Integration</name>
+        <t>
+          When recording the result of Hardware-Attestation verification
+          in an Authentication-Results header field
+          <xref target="RFC8601"/>, the following method identifier and
+          property types are used:
+        </t>
+        <artwork><![CDATA[
+Authentication-Results: mx.example.com;
+  hw-attest=pass
+    header.typ=TPM
+    header.alg=RS256
+    header.mfr=INTC
+    header.tier=sovereign
+    header.fp=sha256:a1b2c3d4...
+    header.aid=urn:aid:com.1id:1id-ty62muvf
+        ]]></artwork>
+        <t>Where:</t>
+        <dl>
+          <dt>hw-attest</dt>
+          <dd>The method identifier.  Result is one of: "pass",
+          "fail", "none" (header absent or unparseable), "temperror"
+          (transient verification error), or "permerror" (permanent
+          verification error).</dd>
+
+          <dt>header.typ</dt>
+          <dd>The hardware type from the Hardware-Attestation
+          header.</dd>
+
+          <dt>header.alg</dt>
+          <dd>The signature algorithm.</dd>
+
+          <dt>header.mfr</dt>
+          <dd>The manufacturer code extracted from the identity
+          certificate.  Common values: "INTC" (Intel), "AMD" (AMD),
+          "IFX" (Infineon), "STM" (STMicroelectronics), "NTC"
+          (Nuvoton), "YBK" (Yubico), "VMW" (VMware, virtual
+          TPM).</dd>
+
+          <dt>header.tier</dt>
+          <dd>The inferred trust tier based on the hardware type and
+          manufacturer.  Values: "sovereign", "portable", "virtual",
+          "declared".</dd>
+
+          <dt>header.fp</dt>
+          <dd>The SHA-256 hash of the identity certificate's public
+          key, truncated to the first 16 hex characters.  Serves as a
+          compact hardware fingerprint for reputation tracking.  Full
+          fingerprint SHOULD be available via an extended
+          property.</dd>
+
+          <dt>header.aid</dt>
+          <dd>The agent identity URN from the aid parameter, if
+          present.  Omitted if no aid was provided.</dd>
+        </dl>
+      </section>
+
+      <section anchor="privacy-direct">
+        <name>Privacy Considerations for Direct Attestation</name>
+        <t>
+          Direct Hardware Attestation reveals the sender's persistent
+          hardware fingerprint to every recipient.  This linkability is
+          a deliberate design choice for reputation systems; see
+          <xref target="priv-fingerprint"/> for the full privacy
+          analysis and <xref target="priv-mode2"/> for the
+          privacy-preserving alternative.
+        </t>
+      </section>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="sd-jwt-proof">
+      <name>Mode 2: SD-JWT Trust Proof</name>
+
+      <t>
+        This section defines an SD-JWT-based trust proof using
+        <xref target="RFC9901"/>.  Like the CMS bundle in Mode 1,
+        the SD-JWT is transport-independent (see
+        <xref target="design-principles"/>).
+      </t>
+
+      <section anchor="sd-jwt-overview">
+        <name>Overview</name>
+        <t>
+          SD-JWT Trust Proof provides a privacy-preserving attestation
+          mechanism where an Issuer (an entity that has previously
+          verified the sender's hardware attestation) issues a
+          per-message Selective Disclosure JWT
+          <xref target="RFC9901"/> containing claims about the
+          sender's trust classification and a cryptographic binding
+          to the specific email being sent.  The claim structure is
+          informed by the Entity Attestation Token (EAT) model
+          <xref target="RFC9711"/>.
+        </t>
+        <t>
+          For each outgoing email, the sending agent computes a
+          message-binding hash (covering the email headers and body)
+          and submits it to the Issuer over an authenticated channel.
+          The Issuer verifies that the requesting agent is currently
+          enrolled with valid hardware, creates an SD-JWT containing
+          the message-binding hash as a nonce claim, and returns the
+          signed token with disclosure values for all selectively
+          disclosable claims.  The agent then selects which claims
+          to reveal and includes the SD-JWT presentation in the
+          email header.
+        </t>
+        <t>
+          Because the Issuer signs the SD-JWT (not the agent), no
+          agent-specific key appears in the token.  A recipient
+          learns only what the sender chose to disclose -- for
+          example, "my hardware trust tier is sovereign" -- without
+          learning the sender's identity, hardware fingerprint, or
+          any other persistent identifier.  The Issuer identifier
+          (iss) and the message-binding nonce are always visible;
+          all other claims are selectively disclosable.
+        </t>
+        <t>
+          This mode requires the recipient to trust the Issuer's
+          signing key (obtainable via DNS or the Issuer's JWKS
+          endpoint per <xref target="issuer-discovery"/>).  It does
+          NOT require trust in any hardware manufacturer CA, as the
+          Issuer has already performed that verification during
+          enrollment.
+        </t>
+        <t>
+          The per-message Issuer interaction is the cost of full
+          unlinkability: the agent must contact the Issuer for each
+          email, and the Issuer becomes an availability dependency
+          for Mode 2 senders.  If the Issuer is unreachable, the
+          agent MAY fall back to Mode 1 (Direct Hardware Attestation)
+          if its policy permits hardware fingerprint disclosure, or
+          MAY defer sending until the Issuer recovers.  The Issuer
+          learns that the agent is sending a message (and the timing
+          thereof) but does not learn the message content -- only the
+          message-binding hash, which is a SHA-256 digest from which
+          content cannot be recovered.  Issuers MUST NOT log
+          message-binding hashes or correlate them with message
+          metadata beyond what is necessary for rate limiting and
+          abuse prevention.
+        </t>
+      </section>
+
+      <section anchor="sd-jwt-header">
+        <name>Header Field Definition</name>
+        <artwork type="abnf"><![CDATA[
+Hardware-Trust-Proof = "Hardware-Trust-Proof" ":" SP
+                       sd-jwt-presentation CRLF
+
+sd-jwt-presentation = sd-jwt "~" *( disclosure "~" )
+
+; sd-jwt and disclosure are defined in RFC 9901
+        ]]></artwork>
+        <t>
+          The header value is an SD-JWT presentation as defined in
+          <xref target="RFC9901"/>, consisting of the Issuer-signed
+          JWT followed by zero or more disclosures.  No Key Binding
+          JWT (KB-JWT) is included; message binding is provided by
+          the nonce claim in the Issuer-signed payload (see
+          <xref target="sd-jwt-message-binding"/>).
+        </t>
+        <t>
+          The SD-JWT payload MUST include the following claims:
+        </t>
+        <dl>
+          <dt>iss</dt>
+          <dd>The Issuer's identifier (a URI matching the Issuer
+          domain derived from the agent's URN namespace).  Used to
+          locate the Issuer's signing key for signature
+          verification.</dd>
+
+          <dt>iat</dt>
+          <dd>Issuance time as a NumericDate.  Because the SD-JWT
+          is per-message, iat reflects the time the Issuer signed
+          this specific token.</dd>
+
+          <dt>exp</dt>
+          <dd>Expiration time as a NumericDate.  MUST NOT exceed
+          600 seconds (10 minutes) after iat.  This short validity
+          window is appropriate because the SD-JWT is per-message:
+          the agent requests a fresh token for each email, and the
+          token need only remain valid long enough for the message
+          to traverse the sending mail infrastructure.  Issuers
+          SHOULD set exp to 300 seconds (5 minutes) after iat for
+          typical deployments.</dd>
+
+          <dt>nonce</dt>
+          <dd>A base64url-encoded message-binding digest that
+          cryptographically ties this SD-JWT to a specific email.
+          Computed as defined in
+          <xref target="sd-jwt-message-binding"/>.  This claim
+          MUST be present and MUST NOT be selectively
+          disclosable.</dd>
+
+          <dt>_sd</dt>
+          <dd>Array of digests for selectively disclosable claims,
+          as defined in <xref target="RFC9901"/>.</dd>
+        </dl>
+        <t>
+          The following claims SHOULD be available for selective
+          disclosure (present as hashed entries in _sd):
+        </t>
+        <dl>
+          <dt>trust_tier</dt>
+          <dd>The sender's hardware trust classification.  Values
+          include "sovereign" (genuine non-virtual hardware),
+          "portable" (smart card / USB token), "virtual"
+          (hypervisor-provided), and "declared" (software-only).</dd>
+
+          <dt>sub</dt>
+          <dd>The sender's agent identity URN as defined in
+          <xref target="agent-identity-format"/>.</dd>
+
+          <dt>handle</dt>
+          <dd>A human-readable name for the sender, if assigned.</dd>
+
+          <dt>hw_manufacturer</dt>
+          <dd>The hardware manufacturer code (e.g., "INTC", "AMD",
+          "YBK").</dd>
+
+          <dt>enrolled_at</dt>
+          <dd>The timestamp at which the sender enrolled with the
+          Issuer.</dd>
+
+          <dt>operator_email</dt>
+          <dd>A contact address for the human operator responsible
+          for this agent.  Allows relying parties to reach the
+          accountable person without requiring the agent identity
+          itself to be disclosed.</dd>
+
+          <dt>hardware_locked</dt>
+          <dd>Boolean indicating whether the identity is permanently
+          bound to a single hardware device.  Once locked, the agent
+          can no longer add or migrate to new devices.  This is an
+          irreversible operation.</dd>
+
+          <dt>locked_at</dt>
+          <dd>Timestamp (ISO 8601) at which the hardware lock was
+          applied.  Present only when hardware_locked is true.</dd>
+
+          <dt>credential_pointer_count</dt>
+          <dd>Integer count of registered credential pointers for
+          this identity.  Allows a verifier to confirm that an agent
+          has external credentials on file without revealing the
+          credentials themselves.</dd>
+        </dl>
+      </section>
+
+      <section anchor="sd-jwt-message-binding">
+        <name>Message Binding via Issuer-Signed Nonce</name>
+        <t>
+          Each Mode 2 SD-JWT is per-message: the Issuer signs a
+          fresh token for each email, incorporating a nonce claim
+          that cryptographically binds the token to the specific
+          message being sent.  Because the Issuer signs the token
+          directly (rather than the agent signing a Key Binding JWT
+          with a key embedded in the token), no agent-specific
+          cryptographic material appears in the presentation.
+        </t>
+        <t>
+          The message-binding nonce is computed by the sending agent
+          before requesting the SD-JWT from the Issuer:
+        </t>
+        <artwork><![CDATA[
+  message-binding = h-hash || bh-raw || ts-bytes
+  nonce = base64url(SHA-256(message-binding))
+
+  h-hash   = SHA-256(canonicalised-headers)  ; 32 bytes
+  bh-raw   = SHA-256(canonicalised body)     ; 32 bytes
+  ts-bytes = big-endian uint64(iat)          ; 8 bytes
+        ]]></artwork>
+        <t>
+          The agent proposes an iat value (its current time) when
+          requesting the token; the Issuer MUST reject proposed
+          timestamps that differ from the Issuer's clock by more
+          than 60 seconds.  The accepted iat becomes both the
+          SD-JWT's iat claim and the timestamp used in ts-bytes,
+          ensuring sender and verifier agree on the value.
+        </t>
+        <t>
+          The canonicalised-headers are computed using the same
+          rules as Mode 1 (see <xref target="header-format"/>):
+          the headers From, To, Subject, Date, and Message-ID
+          (at minimum) are canonicalised per DKIM relaxed header
+          canonicalisation (<xref target="RFC6376"/> Section 3.4.2),
+          each terminated with CRLF, then the
+          Hardware-Trust-Proof header itself is appended last
+          (canonicalised the same way, with its value replaced by
+          the empty string, without a trailing CRLF).
+        </t>
+        <t>
+          The agent submits the computed nonce and proposed iat to
+          the Issuer over an authenticated channel (e.g., TLS
+          client certificate authentication using the agent's
+          hardware-resident key, or an OAuth2 token obtained during
+          enrollment).  The Issuer verifies that the requesting
+          agent is currently enrolled with valid hardware and has
+          not been revoked, then creates and signs an SD-JWT
+          containing the nonce along with selectively disclosable
+          claims about the agent.  The Issuer returns the signed
+          SD-JWT and the disclosure values for all selectively
+          disclosable claims.  The agent selects which disclosures
+          to include in the presentation.
+        </t>
+        <t>
+          Because the nonce is embedded in the Issuer-signed
+          payload, any modification to the email headers or body
+          after the token is issued causes the nonce to mismatch
+          during verification.  Because the Hardware-Trust-Proof
+          header is included in the canonicalised-headers (with
+          its value blanked during nonce computation), the choice
+          of disclosed claims is also bound to the message.
+        </t>
+        <t>
+          The Issuer's signature on the nonce serves a dual
+          purpose: it proves that a currently enrolled agent with
+          verified hardware requested this specific message
+          binding, and it asserts the Issuer's claims about the
+          agent's trust classification.  No agent-specific key
+          appears in the token, so recipients cannot link multiple
+          emails to the same sender based on the Mode 2 header
+          alone.
+        </t>
+      </section>
+
+      <section anchor="sd-jwt-verification">
+        <name>Verification Algorithm</name>
+        <ol>
+          <li>
+            Parse the Hardware-Trust-Proof header as an SD-JWT
+            presentation per <xref target="RFC9901"/>.  The
+            presentation consists of the Issuer-signed JWT and
+            zero or more disclosures; no Key Binding JWT is
+            expected.
+          </li>
+          <li>
+            Extract the issuer (iss) claim from the SD-JWT payload.
+          </li>
+          <li>
+            Obtain the Issuer's public key.  The verifier MUST
+            first check for a DNS-published key (see
+            <xref target="issuer-key-dns"/>).  If no DNS record
+            is found, the verifier MAY fall back to the Issuer's
+            HTTPS JWKS endpoint
+            (e.g., {iss}/.well-known/jwks.json).  Cached keys
+            SHOULD have a TTL of at least 1 hour and at most
+            24 hours.
+          </li>
+          <li>
+            Verify the SD-JWT signature against the Issuer's public
+            key per <xref target="RFC9901"/>.
+          </li>
+          <li>
+            Verify that exp has not passed and iat is within an
+            acceptable window.  Because Mode 2 SD-JWTs are
+            per-message, the RECOMMENDED exp is 300 seconds after
+            iat; verifiers SHOULD reject tokens where exp exceeds
+            iat by more than 3600 seconds (1 hour).
+          </li>
+          <li>
+            For each disclosure present, verify that its hash matches
+            an entry in the _sd array.
+          </li>
+          <li>
+            <t>Verify the message binding.  Extract the nonce claim
+            from the SD-JWT payload.  If absent, the result is
+            "fail" (missing message binding).  Recompute the
+            expected message-binding digest as defined in
+            <xref target="sd-jwt-message-binding"/>: canonicalise
+            the email headers (From, To, Subject, Date, Message-ID
+            at minimum) and body, compute message-binding =
+            h-hash || bh-raw || ts-bytes (using the SD-JWT's iat
+            for ts-bytes), then
+            base64url(SHA-256(message-binding)).  Compare the
+            result with the nonce claim value.  If they differ,
+            the result is "fail" (message binding mismatch).</t>
+          </li>
+          <li>
+            Extract the disclosed claims.  The result is "pass"
+            with the set of verified claims.
+          </li>
+        </ol>
+      </section>
+
+      <section anchor="sd-jwt-auth-results">
+        <name>Authentication-Results Integration</name>
+        <artwork><![CDATA[
+Authentication-Results: mx.example.com;
+  hw-trust=pass
+    header.trust_tier=sovereign
+    header.registry=1id.com
+        ]]></artwork>
+        <dl>
+          <dt>hw-trust</dt>
+          <dd>The method identifier.  Result values are the same as
+          for hw-attest.</dd>
+
+          <dt>header.trust_tier</dt>
+          <dd>The disclosed trust tier value, if the sender chose to
+          reveal it.</dd>
+
+          <dt>header.registry</dt>
+          <dd>The Issuer domain (derived from the iss claim).</dd>
+        </dl>
+      </section>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="combined-mode">
+      <name>Combined Mode</name>
+      <t>
+        A sending agent MAY include both Hardware-Attestation and
+        Hardware-Trust-Proof headers in the same message.  When both
+        are present:
+      </t>
+      <ul>
+        <li>
+          Receivers that trust hardware manufacturer CAs but not the
+          Issuer SHOULD verify Hardware-Attestation and ignore
+          Hardware-Trust-Proof.
+        </li>
+        <li>
+          Receivers that trust the Issuer but prefer not to process
+          the full certificate chain SHOULD verify
+          Hardware-Trust-Proof and MAY ignore Hardware-Attestation.
+        </li>
+        <li>
+          Receivers that support both SHOULD verify both and record
+          both results in Authentication-Results.  Agreement between
+          the two mechanisms provides defence-in-depth: compromising
+          either the manufacturer CA or the Issuer alone is
+          insufficient to forge both attestations.
+        </li>
+      </ul>
+      <t>
+        The two mechanisms are independent.  Failure of one MUST NOT
+        cause the other to be treated as failed.
+      </t>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="sybil-resistance">
+      <name>Sybil Resistance Properties</name>
+      <t>
+        The primary security goal of this specification is Sybil
+        resistance: making it economically infeasible for an attacker
+        to create many sender identities.
+      </t>
+      <section anchor="sybil-mode1">
+        <name>Direct Hardware Attestation (Mode 1)</name>
+        <t>
+          Each hardware security component contains exactly one identity
+          key, which produces exactly one identity certificate.  The
+          hardware fingerprint (identity certificate public key hash)
+          provides the underlying Sybil resistance: creating N
+          identities requires N physical devices.
+        </t>
+        <t>
+          The agent identity URN (aid) is the RECOMMENDED primary key
+          for reputation tracking.  When aid is present, verifiers
+          SHOULD build reputation against the aid rather than the
+          hardware fingerprint, because the aid persists across
+          hardware migrations (see
+          <xref target="identity-hardware-cardinality"/>).  The
+          hardware fingerprint serves as a secondary signal that
+          anchors the identity to physical hardware and enables
+          reputation tracking for agents that do not present an aid.
+        </t>
+        <t>
+          A receiving mail server that tracks agent identities (or,
+          when aid is absent, hardware fingerprints) can enforce
+          policies such as:
+        </t>
+        <ul>
+          <li>Rate limiting per agent identity</li>
+          <li>Reputation scoring per agent identity</li>
+          <li>Blocking agent identities associated with abuse</li>
+        </ul>
+        <t>
+          An attacker attempting to evade these policies requires a
+          new physical hardware security component (minimum cost: the
+          device itself at ~$20 plus potentially a host machine at
+          ~$200-2000), compared to zero cost for creating a new
+          software identity.
+        </t>
+        <t>
+          Multiple agents sharing the same hardware (e.g., multiple
+          VMs on a server with a single TPM) share the same hardware
+          fingerprint and therefore linked reputations.  This shared
+          fate model creates economic incentive for infrastructure
+          operators to police their tenants: if one agent on a machine
+          misbehaves, all agents on that machine inherit the
+          reputational consequences.
+        </t>
+      </section>
+      <section anchor="sybil-mode2">
+        <name>SD-JWT Trust Proof (Mode 2)</name>
+        <t>
+          Sybil resistance in Mode 2 depends on the Issuer's
+          enrollment policy.  An Issuer that assigns trust_tier values
+          indicating hardware verification (e.g., "sovereign") MUST
+          verify hardware attestation at enrollment time and MUST
+          enforce the cardinality constraints defined in
+          <xref target="identity-hardware-cardinality"/>: at most one
+          agent identity per hardware device within that Issuer's
+          namespace, while permitting hardware migration (multiple
+          devices backing the same identity over time).  Such an
+          Issuer provides equivalent Sybil resistance to Mode 1,
+          with the additional benefit that the hardware fingerprint
+          is not revealed to email recipients.
+        </t>
+        <t>
+          Issuers SHOULD monitor for anomalous enrollment patterns
+          (e.g., many enrollments from a single IP range or a sudden
+          spike in enrollments from a specific manufacturer CA) and
+          SHOULD be capable of suspending enrollments pending
+          investigation.
+        </t>
+        <t>
+          An Issuer that enrolls software-only agents (trust_tier
+          "declared") provides no hardware-based Sybil resistance and
+          MUST NOT assign trust_tier values that imply hardware
+          verification.  The trust_tier claim distinguishes these
+          cases, enabling recipients to weight trust appropriately.
+        </t>
+      </section>
+      <section anchor="sybil-vtpm">
+        <name>Virtual Hardware</name>
+        <t>
+          Virtual TPMs (vTPMs) provided by hypervisors (VMware,
+          Hyper-V, QEMU) have valid identity certificates signed by
+          the hypervisor vendor's CA, but the hypervisor operator can
+          instantiate arbitrary numbers of vTPMs.  Virtual TPMs
+          therefore provide no hardware-based Sybil resistance against
+          the hypervisor operator.  They do, however, provide benefits
+          over software-only keys (typ=SFT):
+        </t>
+        <ul>
+          <li>Key persistence managed by the hypervisor (the agent
+          does not need to store key material).</li>
+          <li>Modest cost barriers (provisioning a vTPM is slower and
+          more resource-intensive than generating a software key
+          pair).</li>
+          <li>Reputation accumulation incentive (discarding a vTPM
+          identity forfeits its accumulated reputation).</li>
+        </ul>
+        <t>
+          Receiving mail servers MUST distinguish between physical and
+          virtual hardware.  The identity certificate's issuer field
+          identifies the manufacturer: VMware-issued or Microsoft
+          Hyper-V-issued certificates indicate a virtual TPM.  The
+          header.tier property in Authentication-Results ("sovereign"
+          vs "virtual") and the typ parameter ("TPM" vs "VRT")
+          communicate this distinction.
+        </t>
+        <t>
+          Mail servers SHOULD apply significantly different reputation
+          thresholds for virtual vs. physical hardware.  For
+          high-trust scenarios, verifiers MAY reject virtual TPM
+          attestation entirely and require physical hardware (typ=TPM
+          or typ=PIV).
+        </t>
+      </section>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="interaction-dkim">
+      <name>Interaction with Existing Email Authentication</name>
+      <t>
+        The mechanisms defined in this document complement rather
+        than replace existing email authentication:
+      </t>
+      <dl>
+        <dt>SPF <xref target="RFC7208"/></dt>
+        <dd>Verifies the sending IP is authorised for the domain.
+        Orthogonal to hardware attestation.  Both SHOULD be used.</dd>
+
+        <dt>DKIM <xref target="RFC6376"/></dt>
+        <dd>Provides domain-level signing.  Hardware-Attestation
+        provides device-level signing.  They protect different
+        properties: DKIM proves domain authorisation;
+        Hardware-Attestation proves hardware identity.
+        Both SHOULD be used.</dd>
+
+        <dt>DMARC <xref target="RFC7489"/></dt>
+        <dd>Ties SPF and DKIM together with policy.  A future
+        extension to DMARC could incorporate hardware attestation
+        results into the policy evaluation.  This is out of scope
+        for this document.</dd>
+
+        <dt>ARC <xref target="RFC8617"/></dt>
+        <dd>Preserves authentication results through forwarding
+        chains.  ARC SHOULD preserve Hardware-Attestation and
+        Hardware-Trust-Proof Authentication-Results when forwarding
+        messages.</dd>
+
+        <dt>S/MIME <xref target="RFC8551"/></dt>
+        <dd>Provides end-to-end encryption and sender signing via
+        CA-issued certificates.  S/MIME and Hardware-Attestation
+        operate at different layers and coexist without interference:
+        S/MIME wraps or signs the message body within MIME structures,
+        while Hardware-Attestation adds a header field alongside the
+        message.  The body hash (bh) in the Hardware-Attestation
+        header is computed over the raw canonicalised body, including
+        any S/MIME MIME structures.  A message MAY carry both S/MIME
+        signatures and hardware attestation simultaneously.</dd>
+
+        <dt>OpenPGP / PGP/MIME <xref target="RFC3156"/></dt>
+        <dd>Like S/MIME, OpenPGP operates at the body level
+        (encrypting or signing the message content within MIME
+        structures).  Hardware-Attestation operates at the header
+        level.  The two mechanisms are fully orthogonal: a PGP-signed
+        message can carry a Hardware-Attestation header, and the
+        verifier processes each independently.</dd>
+      </dl>
+
+      <section anchor="multiple-headers">
+        <name>Multiple Headers and Forwarding</name>
+        <t>
+          If multiple Hardware-Attestation headers are present in a
+          message (e.g., if a forwarding gateway adds its own
+          attestation), the verifier SHOULD evaluate all of them
+          independently and record each result separately in
+          Authentication-Results, using the same precedence
+          conventions as for multiple DKIM-Signature headers
+          <xref target="RFC6376"/>.
+        </t>
+        <t>
+          Mailing lists and content-modifying forwarders that alter
+          the message body will invalidate the body hash (bh) in
+          any existing Hardware-Attestation header.  This is expected
+          and analogous to DKIM signature breakage through body
+          modification.  Such intermediaries SHOULD preserve the
+          original Hardware-Attestation header (the verifier will
+          record "fail" due to body hash mismatch) and MAY add their
+          own Hardware-Attestation header covering the modified body,
+          if the intermediary itself has hardware attestation
+          capability.  ARC <xref target="RFC8617"/> SHOULD be used to
+          preserve the original authentication results from before
+          the modification.
+        </t>
+      </section>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="submission-requirements">
+      <name>Message Submission Requirements</name>
+
+      <t>
+        The attestation signature in the Hardware-Attestation header is
+        produced by the sending agent, not by the mail server.  When
+        the aid parameter is present, it is cryptographically bound to
+        the signature (see <xref target="header-format"/>), so any
+        modification of the aid after signing causes verification to
+        fail at the receiving end.  As defence-in-depth, Mail
+        Submission Agents (MSAs) that accept messages from
+        hardware-attested senders MUST also enforce identity binding
+        at submission time, rejecting messages before they enter the
+        mail system rather than relying solely on receiver-side
+        verification.
+      </t>
+      <t>
+        Agents submitting messages through an attestation-aware MSA
+        MUST authenticate to the MSA.  The MSA SHOULD support
+        authentication using the agent's hardware-resident key
+        (e.g., TLS client certificate authentication where the
+        client certificate is signed by the same AK used for
+        attestation, or a challenge-response protocol using the
+        TPM or PIV signing key).  This ensures that the MSA can
+        verify the submitting agent controls the hardware
+        corresponding to the attestation header, preventing
+        credential-theft scenarios where SMTP credentials are
+        compromised but the hardware is not.
+      </t>
+
+      <section anchor="submission-aid-binding">
+        <name>Agent Identity Binding at Submission</name>
+        <t>
+          When an MSA receives a message containing a
+          Hardware-Attestation header with an aid (agent identity)
+          parameter, the MSA MUST verify that the aid value
+          corresponds to the authenticated account submitting the
+          message.  The binding between authenticated account and
+          permitted agent identity URN(s) is established during
+          account provisioning and is outside the scope of this
+          specification, but the enforcement is normative:
+        </t>
+        <ul>
+          <li>
+            If the aid value does not match any agent identity URN
+            authorised for the submitting account, the MSA MUST reject
+            the message with an appropriate error (e.g., SMTP 550
+            "5.7.1 Agent identity not authorised for this account").
+          </li>
+          <li>
+            If the Hardware-Attestation header is present but contains
+            no aid parameter, the MSA SHOULD still verify that the
+            hardware fingerprint (derived from the chain parameter)
+            corresponds to hardware registered to the
+            submitting account, if such a registry is available.
+          </li>
+          <li>
+            If the MSA does not implement hardware attestation
+            verification, it MUST NOT strip or modify the
+            Hardware-Attestation header.  The header will be evaluated
+            by downstream verifiers.
+          </li>
+        </ul>
+        <t>
+          This requirement parallels the existing SMTP AUTH obligation:
+          just as an MSA enforces that the envelope sender (MAIL FROM)
+          and header From address belong to the authenticated user, an
+          attestation-aware MSA enforces that the agent identity
+          belongs to the authenticated agent.
+        </t>
+      </section>
+
+      <section anchor="submission-hw-fingerprint-binding">
+        <name>Hardware Fingerprint Binding at Submission</name>
+        <t>
+          For Mode 1 (Direct Hardware Attestation), the MSA SHOULD
+          extract the hardware fingerprint from the attestation chain
+          and verify it against the fingerprint registered to the
+          submitting account.  This prevents an attacker who has
+          obtained valid SMTP credentials from substituting a
+          different device's attestation evidence.
+        </t>
+        <t>
+          For Mode 2 (SD-JWT Trust Proof), the MSA SHOULD verify that
+          the Issuer (iss claim) and, if disclosed, the agent identity
+          URN (sub claim) are consistent with the submitting account's
+          registered identity.
+        </t>
+      </section>
+
+      <section anchor="submission-no-attestation">
+        <name>Messages Without Attestation</name>
+        <t>
+          An MSA that serves hardware-attested agents MAY also accept
+          messages without Hardware-Attestation or Hardware-Trust-Proof
+          headers, subject to its own policy.  The absence of
+          attestation headers from a known-attested account SHOULD be
+          logged as anomalous but MUST NOT cause message rejection
+          unless the account's policy explicitly requires attestation
+          on every message.
+        </t>
+      </section>
+
+      <section anchor="submission-duplicate-headers">
+        <name>Duplicate Header Rejection</name>
+        <t>
+          An MSA MUST reject any submitted message that contains more
+          than one Hardware-Attestation header field.  A legitimate
+          sender produces exactly one attestation per message.
+          Multiple Hardware-Attestation headers in a submitted
+          (non-forwarded) message indicate either a software defect
+          or an injection attempt.  This check MUST occur before
+          DKIM signing, so that the MSA never signs a message
+          containing duplicate attestation headers.
+        </t>
+      </section>
+
+      <section anchor="submission-timestamp-validation">
+        <name>Timestamp Validation at Submission</name>
+        <t>
+          The MSA SHOULD verify that the ts value in the
+          Hardware-Attestation header is within a reasonable window
+          of the current time (RECOMMENDED: 60 seconds).  A
+          timestamp significantly in the past may indicate a replayed
+          header; a timestamp in the future may indicate clock
+          manipulation intended to extend the attestation's apparent
+          validity.  If the timestamp is outside the acceptable
+          window, the MSA SHOULD reject the message.
+        </t>
+      </section>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="interoperability">
+      <name>Interoperability Considerations</name>
+
+      <section anchor="backward-compat">
+        <name>Backward Compatibility</name>
+        <t>
+          This specification introduces new email headers that are
+          ignored by mail servers that do not implement it.  Messages
+          carrying Hardware-Attestation or Hardware-Trust-Proof headers
+          are fully compatible with legacy mail infrastructure: the
+          headers are simply unrecognised and have no effect on
+          delivery.  This ensures that deployment can proceed
+          incrementally without disrupting existing email flows.
+        </t>
+      </section>
+
+      <section anchor="signing-order">
+        <name>DKIM Coverage of Attestation Headers</name>
+        <t>
+          Because the sending agent adds the Hardware-Attestation
+          and Hardware-Trust-Proof headers before submitting the
+          message to the MSA, DKIM signing (which occurs at the
+          MSA or a downstream MTA) naturally occurs after these
+          headers are present.  The DKIM signer SHOULD include
+          Hardware-Attestation and Hardware-Trust-Proof in the
+          DKIM-Signature h= tag so that the DKIM signature
+          protects the attestation evidence against modification
+          in transit.  This allows a verifier to confirm that the
+          domain owner's mail infrastructure accepted the
+          attestation header as submitted by the agent.
+        </t>
+      </section>
+
+      <section anchor="header-size">
+        <name>Header Size Considerations</name>
+        <t>
+          The base64-encoded CMS chain in Mode 1 can be several
+          kilobytes, depending on the number of intermediate CA
+          certificates.  Implementations SHOULD use line folding per
+          <xref target="RFC5322"/> to keep individual header lines
+          within the 998-octet limit.  Mail servers that impose
+          maximum header size limits SHOULD allow at least 8192 octets
+          for the Hardware-Attestation header value.
+        </t>
+      </section>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="implementation-status">
+      <name>Implementation Status</name>
+      <t>
+        NOTE TO RFC EDITOR: Please remove this section before
+        publication.
+      </t>
+      <t>
+        This section records the status of known implementations of
+        the protocol defined by this specification at the time of
+        posting of this Internet-Draft, and is based on a proposal
+        described in <xref target="RFC7942"/>.
+      </t>
+
+      <section>
+        <name>1id.com Issuer</name>
+        <t>
+          Organisation: 1id.com (https://1id.com)
+        </t>
+        <t>
+          Description: An implementation of Mode 2 (SD-JWT Trust
+          Proof) as described in this draft, with Mode 1 (Direct
+          Hardware Attestation) in development.  The implementation
+          includes server-side identity certificate chain validation
+          against manufacturer root CAs (Intel, AMD, Infineon,
+          STMicroelectronics, Nuvoton, Qualcomm, Yubico), anti-Sybil
+          enforcement via a one-device-per-identity registry, and
+          SD-JWT trust proof issuance with selective disclosure of
+          nine claims (sub, handle, trust_tier, hw_manufacturer,
+          enrolled_at, operator_email, hardware_locked, locked_at,
+          credential_pointer_count).  The system supports both
+          TPM-based and PIV-based (YubiKey) attestation, including
+          co-location binding ceremonies.  Agent identities use the
+          <tt>urn:aid:com.1id:</tt> namespace.
+        </t>
+        <t>
+          Maturity: Beta.  Deployed in production at https://1id.com.
+        </t>
+        <t>
+          Coverage: Mode 2 (SD-JWT Trust Proof) is fully implemented,
+          including transient-only AK model for TPM attestation with
+          no NV storage writes, multi-device identity management with
+          hardware lock, and per-message SD-JWT issuance.  Mode 1
+          (Direct Hardware Attestation via CMS) is in development.
+        </t>
+        <t>
+          Contact: Christopher Drake &lt;cnd@1id.com&gt;
+        </t>
+        <t>
+          Open-source components:
+        </t>
+        <ul>
+          <li>
+            <strong>Python SDK:</strong>
+            <eref target="https://github.com/1id-com/oneid-sdk"/> --
+            Client-side enrollment and attestation library.  Published
+            to PyPI as "oneid".
+          </li>
+          <li>
+            <strong>Node.js SDK:</strong>
+            <eref target="https://github.com/1id-com/oneid-node"/> --
+            Client-side enrollment and attestation library.  Published
+            to npm as "1id".
+          </li>
+          <li>
+            <strong>Hardware helper binary:</strong>
+            <eref target="https://github.com/1id-com/oneid-enroll"/> --
+            Cross-platform Go binary for TPM access (Windows TBS, Linux
+            /dev/tpmrm0), PIV smart card operations, and AK
+            provisioning.
+          </li>
+          <li>
+            <strong>Internet-Draft companion repository:</strong>
+            <eref target="https://github.com/1id-com/draft-drake-email-hardware-attestation"/> --
+            Draft XML source, example verification code for both modes,
+            and test vectors.
+          </li>
+          <li>
+            <strong>Manufacturer CA Trust Store:</strong>
+            <eref target="https://github.com/1id-com/tpm-manufacturer-cas"/> --
+            Community-curated collection of hardware manufacturer root
+            CA certificates for identity certificate chain validation,
+            as referenced in
+            <xref target="appendix-manufacturer-cas"/>.
+          </li>
+        </ul>
+      </section>
+
+      <section>
+        <name>MailPal.com Verifier and Relay</name>
+        <t>
+          Organisation: Crypt Inc. (https://mailpal.com)
+        </t>
+        <t>
+          Description: An email service (Stalwart Mail Server on
+          Linux) intended to implement end-to-end hardware attestation
+          for both sending and receiving.  Planned capabilities
+          include: on the outbound path, MSA validation of
+          Hardware-Attestation and Hardware-Trust-Proof headers at
+          submission time per
+          <xref target="submission-requirements"/>, agent identity
+          binding enforcement, and attestation header inclusion in
+          DKIM signature coverage.  On the inbound path, verification
+          of both Mode 1 certificate chains and Mode 2 SD-JWT trust
+          proofs, Authentication-Results recording per
+          <xref target="auth-results"/> and
+          <xref target="sd-jwt-auth-results"/>, and
+          trust-tier-differentiated delivery policy.
+        </t>
+        <t>
+          Maturity: Alpha.  Mail infrastructure deployed at
+          https://mailpal.com; attestation header verification in
+          development.
+        </t>
+        <t>
+          Coverage: Mail transport infrastructure is operational.
+          Attestation header generation, submission validation, and
+          inbound verification are in development.
+        </t>
+        <t>
+          Contact: Christopher Drake &lt;cnd@1id.com&gt;
+        </t>
+        <t>
+          Open-source components:
+        </t>
+        <ul>
+          <li>
+            <strong>Attestation verification library:</strong>
+            <eref target="https://github.com/1id-com/hw-attest-verify"/> --
+            Verification of Mode 1 CMS attestation bundles and
+            Mode 2 SD-JWT trust proofs.  Suitable for integration
+            into any MTA or mail filter.
+          </li>
+        </ul>
+      </section>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="iana-considerations">
+      <name>IANA Considerations</name>
+
+      <section>
+        <name>Header Field Registration</name>
+        <t>
+          IANA is requested to register the following header fields
+          in the "Permanent Message Header Field Names" registry:
+        </t>
+        <dl>
+          <dt>Hardware-Attestation</dt>
+          <dd>Applicable protocol: mail.  Status: standard.
+          Reference: this document,
+          <xref target="header-format"/>.</dd>
+
+          <dt>Hardware-Trust-Proof</dt>
+          <dd>Applicable protocol: mail.  Status: standard.
+          Reference: this document,
+          <xref target="sd-jwt-header"/>.</dd>
+        </dl>
+      </section>
+
+      <section>
+        <name>Authentication Method Registration</name>
+        <t>
+          IANA is requested to register the following entries in the
+          "Email Authentication Methods" registry
+          <xref target="RFC8601"/>:
+        </t>
+        <dl>
+          <dt>hw-attest</dt>
+          <dd>Definition: this document,
+          <xref target="auth-results"/>.
+          Applicable versions: 1.</dd>
+
+          <dt>hw-trust</dt>
+          <dd>Definition: this document,
+          <xref target="sd-jwt-auth-results"/>.
+          Applicable versions: 1.</dd>
+        </dl>
+      </section>
+
+      <section>
+        <name>Hardware Attestation Type Registry</name>
+        <t>
+          IANA is requested to create a new registry titled "Hardware
+          Attestation Type Values" with the following initial entries.
+          New entries require Specification Required
+          (<xref target="RFC8126"/>).
+        </t>
+        <table>
+          <thead>
+            <tr>
+              <th>Value</th>
+              <th>Description</th>
+              <th>Reference</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>TPM</td>
+              <td>TPM 2.0 (discrete or firmware)</td>
+              <td>this document</td>
+            </tr>
+            <tr>
+              <td>PIV</td>
+              <td>PIV smart card / USB token</td>
+              <td>this document</td>
+            </tr>
+            <tr>
+              <td>VRT</td>
+              <td>Virtual TPM (hypervisor-provided)</td>
+              <td>this document</td>
+            </tr>
+            <tr>
+              <td>SFT</td>
+              <td>Software-managed key</td>
+              <td>this document</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <name>URN Namespace Registration</name>
+        <t>
+          IANA is requested to register the "aid" URN namespace
+          identifier in the "Formal URN Namespaces" registry per
+          <xref target="RFC8141"/>.  The registration template is
+          provided in <xref target="urn-registration"/>.
+        </t>
+      </section>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="security-considerations">
+      <name>Security Considerations</name>
+
+      <section anchor="manufacturer-ca-compromise">
+        <name>Manufacturer CA Compromise</name>
+        <t>
+          If a hardware manufacturer's root CA private key is
+          compromised, an attacker could forge identity certificates and
+          create unlimited fake hardware identities.  This risk is
+          inherent to any PKI-based system and is mitigated by the same
+          measures that protect manufacturer CAs today: hardware
+          security modules, air-gapped signing ceremonies, and
+          Certificate Transparency <xref target="RFC9162"/>.
+        </t>
+        <t>
+          The SD-JWT Trust Proof (Mode 2) provides partial mitigation:
+          if the Issuer detects anomalous enrollment patterns (e.g.,
+          thousands of enrollments from a single manufacturer CA in a
+          short period), it can suspend enrollments while the compromise
+          is investigated.
+        </t>
+      </section>
+
+      <section anchor="revocation-and-compromise">
+        <name>Revocation and Compromise Response</name>
+        <t>
+          This specification does not define a real-time certificate
+          revocation protocol.  Compromise of individual hardware
+          devices or keys is handled at multiple layers:
+        </t>
+        <dl>
+          <dt>Compromised or stolen device (TPM, YubiKey)</dt>
+          <dd>The device owner notifies their Issuer, which revokes
+          the agent identity.  The Issuer publishes revocation status
+          via its JWKS or a revocation endpoint; verifiers that cache
+          Issuer metadata will detect the revocation at the next
+          refresh.  For Mode 1, the hardware fingerprint SHOULD be
+          added to a local blocklist.  The device's reputation history
+          (which now includes the abuse) persists and follows the
+          hardware fingerprint even if re-enrolled under a new
+          identity.</dd>
+
+          <dt>Manufacturer CA breach</dt>
+          <dd>Verifiers MUST remove the compromised CA from their
+          trust store.  The IANA Hardware Attestation Type registry
+          (see <xref target="iana-considerations"/>) and the
+          community-maintained manufacturer CA trust store (see
+          <xref target="appendix-manufacturer-cas"/>) provide
+          distribution channels for updated trust anchors.</dd>
+
+          <dt>Rogue Issuer</dt>
+          <dd>Verifiers remove the Issuer from their allowlist.
+          Because Issuer trust is a local policy decision (see
+          <xref target="issuer-trust"/>), no central revocation
+          mechanism is required: each verifier independently decides
+          which Issuers to trust, analogous to browser root store
+          management for TLS CAs.</dd>
+        </dl>
+        <t>
+          The absence of a real-time revocation check (such as OCSP)
+          is a deliberate trade-off: adding a synchronous revocation
+          check to the email delivery path would introduce latency
+          and a new availability dependency.  The short validity
+          window for SD-JWT trust proofs (600 seconds) and the
+          per-message timestamp in Mode 1 limit the exposure window
+          for compromised credentials.
+        </t>
+      </section>
+
+      <section anchor="replay-attacks">
+        <name>Replay Attacks</name>
+        <t>
+          The timestamp (ts) in the Hardware-Attestation header limits
+          the replay window.  Receiving mail servers SHOULD reject
+          attestations with timestamps more than 300 seconds from the
+          current time for direct SMTP delivery, and up to 3600 seconds
+          for messages with evidence of intermediate relay hops.
+          Additionally, the body hash (bh) binds the attestation to a
+          specific email body, preventing a valid attestation from being
+          attached to a different message.
+        </t>
+        <t>
+          For SD-JWT Trust Proofs, each SD-JWT is per-message: the
+          nonce claim in the Issuer-signed payload binds the token
+          to the specific email's headers and body, and the short
+          validity window (RECOMMENDED 300 seconds) limits the
+          replay window.  An attacker who intercepts a valid SD-JWT
+          cannot reuse it for a different message because the nonce
+          will not match.
+        </t>
+      </section>
+
+      <section anchor="compromised-endpoints">
+        <name>Compromised Endpoints</name>
+        <t>
+          This specification does not prevent a compromised device from
+          sending attested email -- if an attacker has full control of a
+          device with hardware security, they can use that hardware to
+          attest.  However, this is by design: each compromised device
+          contributes exactly one hardware identity, and that identity
+          accrues reputation (good or bad) permanently.  A botnet of
+          10,000 compromised devices yields 10,000 attestable
+          identities, not the millions possible with software-only
+          identity systems.
+        </t>
+        <t>
+          The transient key model (<xref target="transient-key-model"/>)
+          reduces the privilege requirements for per-message signing.
+          Initial enrollment (the one-time MakeCredential /
+          ActivateCredential exchange) typically requires elevated
+          operating system privileges (administrator on Windows via the
+          TPM Base Services API, or root on Linux via /dev/tpmrm0).
+          Subsequent signing operations (TPM2_Sign with the transient
+          AK) MAY be available to unprivileged processes depending on
+          the operating system configuration.  On Windows, a one-time
+          registry configuration can grant non-administrator processes
+          access to TPM signing operations.
+        </t>
+        <t>
+          The net effect is that hardware attestation raises the bar for
+          email abuse from "any script" to "compromise of a specific
+          physical device," which is a substantial improvement over the
+          status quo even if it is not a complete solution.
+        </t>
+      </section>
+
+      <section anchor="hardware-attacks">
+        <name>Physical Attacks on Hardware Security Components</name>
+        <t>
+          Extracting private keys from a TPM or PIV token requires
+          physical attacks such as electron microscopy, laser fault
+          injection, or side-channel analysis.  Modern security
+          components include countermeasures against these attacks.  The
+          cost and expertise required for successful key extraction is
+          estimated at $50,000-$200,000 per chip, making it economically
+          unviable for spam operations.
+        </t>
+        <t>
+          Even if key extraction were feasible, the extracted key could
+          only impersonate one hardware identity.  The attacker would
+          still need to extract keys from additional devices to create
+          additional identities.
+        </t>
+      </section>
+
+      <section anchor="virtual-tpm-risk">
+        <name>Virtual Hardware Risk</name>
+        <t>
+          Virtual TPMs do not provide the same Sybil resistance as
+          physical hardware; see <xref target="sybil-vtpm"/> for
+          the detailed analysis and policy guidance.
+        </t>
+      </section>
+
+      <section anchor="software-only-risk">
+        <name>Software-Only Attestation Risk</name>
+        <t>
+          Software-managed keys (typ=SFT) provide no hardware-based
+          Sybil resistance; an attacker can generate unlimited key
+          pairs at zero cost.  Verifiers MUST treat software-only
+          attestation (trust_tier "declared") as fundamentally weaker
+          than hardware-backed attestation.  Software-only attestation
+          exists to enable inclusive participation, not to provide
+          Sybil resistance (see <xref target="design-principles"/>).
+        </t>
+      </section>
+
+      <section anchor="transient-object-limits">
+        <name>Transient Object Slot Limits</name>
+        <t>
+          TPMs have a limited number of transient object slots (typically
+          3 to 7 simultaneously loaded objects).  If all slots are
+          occupied, TPM2_CreatePrimary returns TPM_RC_OBJECT_MEMORY
+          (0x0902).  Implementations MUST handle this error by flushing
+          unused transient handles (TPM2_FlushContext) and retrying.
+          Failure to flush transient objects can cause denial of service
+          to other TPM-using applications on the same device.
+        </t>
+      </section>
+
+      <section anchor="policy-abuse">
+        <name>Policy Abuse and Deanonymisation Risk</name>
+        <t>
+          This specification targets AI agents, bots, and autonomous
+          systems (see <xref target="applicability"/>).  It is not
+          intended for individual human senders and is not expected
+          to be incorporated into Mail User Agents (MUAs) designed
+          for interactive human use.  The privacy trade-offs inherent
+          in hardware attestation -- particularly the persistent
+          hardware fingerprint exposed by Mode 1 -- are acceptable
+          for automated senders whose identity is operationally
+          transparent, but disproportionate for human
+          correspondence.
+        </t>
+        <t>
+          However, an AI agent may compose and send email on behalf
+          of an individual (e.g., an executive assistant agent
+          sending calendar invitations, or a customer service agent
+          responding to support tickets).  In such delegated-sending
+          scenarios, the attestation identifies the agent and its
+          hardware, not the human principal.  Operators deploying
+          agents that send on behalf of individuals SHOULD be aware
+          that the persistent hardware fingerprint (Mode 1) or the
+          Issuer identifier (Mode 2) may allow recipients to
+          correlate messages across different human principals
+          served by the same agent.  Where this correlation is
+          undesirable, operators SHOULD use Mode 2 without
+          disclosing the agent identity URN, or SHOULD deploy
+          separate agent identities per human principal.
+        </t>
+        <t>
+          The persistent hardware fingerprint exposed by Mode 1 (see
+          <xref target="priv-fingerprint"/> for linkability details)
+          creates specific abuse scenarios even in automated
+          contexts:
+        </t>
+        <ul>
+          <li>Authoritarian regimes could correlate hardware
+          fingerprints across messages to identify the
+          organisations operating specific agents.</li>
+          <li>Platforms could mandate Mode 1 attestation to
+          deanonymise agents that have legitimate reasons for
+          pseudonymity (e.g., whistleblower-support bots,
+          journalist-source-protection agents).</li>
+          <li>Receiving mail servers that log hardware fingerprints
+          create long-lived tracking databases linking agent
+          activity across recipients and time periods.</li>
+        </ul>
+        <t>
+          Mode 2 (SD-JWT Trust Proof) mitigates these risks by
+          eliminating persistent agent-specific identifiers from the
+          token; see <xref target="priv-mode2"/>.  Receiving mail
+          servers SHOULD NOT require Mode 1 attestation when Mode 2
+          provides sufficient trust signal for the receiver's policy
+          needs.
+        </t>
+      </section>
+
+      <section anchor="header-stripping">
+        <name>Header Stripping and Modification</name>
+        <t>
+          An intermediary mail server could strip or modify the
+          Hardware-Attestation or Hardware-Trust-Proof headers.  This
+          risk is identical to the risk of DKIM signature stripping and
+          is mitigated by the same mechanisms: ARC
+          <xref target="RFC8617"/> preserves authentication results
+          through forwarding chains.
+        </t>
+        <t>
+          Stripping these headers cannot cause a legitimate message to
+          appear illegitimate (it simply loses the attestation).  Adding
+          forged headers is prevented by the cryptographic signatures.
+        </t>
+      </section>
+
+      <section anchor="credential-theft-and-replay">
+        <name>Credential Theft and Identity Substitution</name>
+        <t>
+          Because the attestation signature is produced by the sending
+          agent rather than by the mail server, theft of SMTP
+          credentials alone does not grant the attacker a valid
+          attestation.  The agent identity (aid), when present, is
+          cryptographically bound to the signature: substituting a
+          different aid value causes signature verification to fail
+          at the receiving end.
+        </t>
+        <t>
+          An attacker who intercepts a legitimately signed attestation
+          header could attempt to replay it on a different message.
+          The body hash (bh), timestamp (ts), and signed header hashes
+          (h-hash) prevent replay on altered content.  The MSA
+          identity binding requirements in
+          <xref target="submission-requirements"/> provide
+          defence-in-depth: an attestation-aware MSA rejects messages
+          where the agent identity does not match the submitting
+          account, preventing misuse before the message enters the
+          mail system.
+        </t>
+        <t>
+          Together, the cryptographic binding of aid in the signature
+          and the MSA submission-time enforcement ensure that an
+          agent cannot claim an identity other than its own.
+        </t>
+      </section>
+
+      <section anchor="issuer-trust">
+        <name>Issuer Trust and Accountability</name>
+        <t>
+          The federated issuance model
+          (<xref target="issuer-discovery"/>) means verifiers MUST
+          make their own trust decisions about which Issuers to accept.
+          A malicious Issuer could issue multiple identities for the
+          same hardware, undermining Sybil resistance.  However, this
+          violation is detectable: verifiers that track hardware
+          fingerprints will observe the same fingerprint appearing
+          under multiple agent identities from the same Issuer,
+          which constitutes direct evidence of Issuer misbehaviour.
+        </t>
+        <t>
+          Verifiers SHOULD maintain an allowlist of trusted Issuers,
+          analogous to browser trust stores for TLS CAs.  Reputation
+          services MAY track Issuer quality metrics (enrollment
+          anomaly rates, duplicate-fingerprint detections, abuse
+          report correlations) to inform verifier trust decisions.
+          Verifiers SHOULD remove Issuers from their allowlist when
+          evidence of policy violations is detected.
+        </t>
+      </section>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="privacy-considerations">
+      <name>Privacy Considerations</name>
+
+      <t>
+        This section consolidates the privacy implications of this
+        specification, per <xref target="RFC6973"/>.  Hardware
+        attestation inherently involves persistent identifiers; the
+        privacy properties differ significantly between the two modes
+        and between automated and human senders.
+      </t>
+
+      <section anchor="priv-scope">
+        <name>Applicability to Human vs. Automated Senders</name>
+        <t>
+          This specification targets authentication of automated
+          senders -- AI agents, bots, and high-volume automated
+          systems.  It is NOT intended or recommended for individual
+          human users sending personal or low-volume email.  The
+          persistent hardware fingerprint in Mode 1 uniquely identifies
+          the sending device across all messages and contexts, creating
+          linkability that exceeds current email privacy norms for
+          human correspondence.
+        </t>
+        <t>
+          Operators of human-facing email services that offer hardware
+          attestation as an opt-in feature MUST provide clear disclosure
+          of the linkability implications before activation.  Receivers
+          SHOULD NOT penalise the absence of hardware attestation from
+          senders exhibiting human-characteristic patterns.
+        </t>
+      </section>
+
+      <section anchor="priv-fingerprint">
+        <name>Hardware Fingerprint Linkability</name>
+        <t>
+          Mode 1 (Direct Hardware Attestation) exposes a persistent,
+          globally unique hardware fingerprint -- the SHA-256 hash of
+          the identity certificate's public key -- to every recipient.
+          This fingerprint is stable for the lifetime of the hardware
+          device and is identical across all protocols (email, HTTP,
+          agent-to-agent) where the same device attests.
+        </t>
+        <t>
+          Any party that observes this fingerprint can correlate
+          messages across recipients, time periods, and transport
+          protocols.  This cross-context linkability is the intended
+          mechanism for reputation building in automated sender
+          scenarios, but it also enables surveillance if misused.
+        </t>
+        <t>
+          The identity certificate additionally reveals the hardware
+          manufacturer and device model family.  In most automated
+          deployments this information is not sensitive, but it does
+          narrow the set of possible senders.
+        </t>
+      </section>
+
+      <section anchor="priv-mode2">
+        <name>Privacy-Preserving Alternative (Mode 2)</name>
+        <t>
+          Mode 2 (SD-JWT Trust Proof) provides Sybil resistance
+          without revealing the hardware fingerprint or any
+          persistent agent-specific identifier.  Because the Issuer
+          signs the per-message SD-JWT directly (rather than the
+          agent signing with a key embedded in the token), no
+          agent-controlled key appears in the presentation.
+          Recipients cannot link multiple emails to the same sender
+          based on Mode 2 headers alone.
+        </t>
+        <t>
+          The sender selects which claims to disclose; the hardware
+          fingerprint, agent identity URN, and device details can
+          all be withheld.  Only the Issuer identifier (iss) and
+          the message-binding nonce are always visible.
+        </t>
+        <t>
+          The privacy cost of full unlinkability is that the agent
+          must contact the Issuer for each email, so the Issuer
+          learns the agent's sending pattern (timing and frequency)
+          though not the message content.  Issuers MUST NOT log or
+          correlate message-binding hashes beyond what is necessary
+          for rate limiting and abuse prevention (see
+          <xref target="priv-issuer"/>).
+        </t>
+        <t>
+          Senders operating in contexts where hardware fingerprint
+          disclosure is unacceptable -- including agents that wish
+          to avoid cross-context tracking -- SHOULD use Mode 2
+          exclusively.  Receivers SHOULD NOT require Mode 1 when
+          Mode 2 provides sufficient trust signal for their policy
+          needs.
+        </t>
+      </section>
+
+      <section anchor="priv-issuer">
+        <name>Issuer Knowledge</name>
+        <t>
+          During enrollment, the Issuer learns the agent's hardware
+          fingerprint (identity certificate public key hash) and
+          associates it with the assigned agent identity URN.  This
+          is necessary for anti-Sybil enforcement.
+        </t>
+        <t>
+          In Mode 2, the Issuer additionally learns that the agent
+          is sending a message each time the agent requests a
+          per-message SD-JWT.  The Issuer receives the
+          message-binding hash (a SHA-256 digest from which message
+          content cannot be recovered) but does not learn the
+          message recipients, subject, or body.  Issuers MUST NOT
+          log message-binding hashes or correlate per-message
+          signing requests with external data to infer message
+          content or recipients.  Issuers SHOULD implement rate
+          limiting at the per-message signing endpoint to prevent
+          abuse, but MUST delete signing request metadata
+          (timestamps, source IPs, message-binding hashes) within
+          24 hours.
+        </t>
+        <t>
+          The specification deliberately separates enrollment
+          (Issuer) from behaviour tracking (reputation services)
+          to limit the Issuer's knowledge of agent activity.
+        </t>
+      </section>
+
+      <section anchor="priv-data-minimisation">
+        <name>Data Minimisation</name>
+        <t>
+          Verifiers that record hardware fingerprints or agent identity
+          URNs for reputation purposes SHOULD apply data minimisation
+          principles: retain only the truncated fingerprint (as
+          specified in <xref target="auth-results"/>) rather than the
+          full identity certificate, and SHOULD define retention
+          policies that limit how long fingerprint-to-message
+          associations are stored.
+        </t>
+      </section>
+    </section>
+
+  </middle>
+
+  <back>
+
+    <references>
+      <name>Normative References</name>
+
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.2119.xml"/>
+
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.4648.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.5652.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.6376.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8141.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8174.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8601.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.9901.xml"/>
+
+    </references>
+
+    <references>
+      <name>Informative References</name>
+
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.1035.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.3156.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.5322.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.5891.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.7208.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.7489.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.7671.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.7942.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8126.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8551.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8617.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.6973.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.9162.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.9334.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.9711.xml"/>
+
+      <reference anchor="TCG-TPM2"
+                 target="https://trustedcomputinggroup.org/resource/tpm-library-specification/">
+        <front>
+          <title>TPM 2.0 Library Specification</title>
+          <author>
+            <organization>Trusted Computing Group</organization>
+          </author>
+          <date year="2024" month="December"/>
+        </front>
+        <seriesInfo name="TCG" value="Revision 185"/>
+      </reference>
+
+      <reference anchor="TCG-EK-PROFILE"
+                 target="https://trustedcomputinggroup.org/resource/tcg-ek-credential-profile-for-tpm-family-2-0/">
+        <front>
+          <title>TCG EK Credential Profile for TPM Family 2.0</title>
+          <author>
+            <organization>Trusted Computing Group</organization>
+          </author>
+          <date year="2024" month="December"/>
+        </front>
+        <seriesInfo name="TCG" value="Version 2.6"/>
+      </reference>
+
+    </references>
+
+    <!-- ====================================================== -->
+    <section anchor="appendix-economics">
+      <name>Appendix: Economics of Hardware-Based Sybil Resistance</name>
+      <t>
+        The following table compares the cost of creating N fake
+        sender identities under various authentication regimes:
+      </t>
+      <table>
+        <thead>
+          <tr>
+            <th>Authentication</th>
+            <th>Cost per Identity</th>
+            <th>Cost of 1M Identities</th>
+            <th>Reusable After Flag?</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Email-only</td>
+            <td>~$0</td>
+            <td>~$0</td>
+            <td>Yes (new address)</td>
+          </tr>
+          <tr>
+            <td>Phone-verified</td>
+            <td>~$0.01-0.10</td>
+            <td>$10K-100K</td>
+            <td>Yes (new SIM)</td>
+          </tr>
+          <tr>
+            <td>Domain + DKIM</td>
+            <td>~$1-10</td>
+            <td>$1M-10M</td>
+            <td>Yes (new domain)</td>
+          </tr>
+          <tr>
+            <td>Hardware Attestation</td>
+            <td>~$20-2000</td>
+            <td>$20M-2B</td>
+            <td>No (device is permanent)</td>
+          </tr>
+        </tbody>
+      </table>
+      <t>
+        The critical difference is the "Reusable After Flag?" column.
+        With every existing mechanism, a flagged identity can be cheaply
+        replaced.  With hardware attestation, a flagged hardware
+        identity is permanently associated with that physical device.
+        The attacker must procure entirely new hardware.
+      </t>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="appendix-manufacturer-cas">
+      <name>Appendix: Hardware Manufacturer Root CAs</name>
+      <t>
+        The following hardware manufacturers publish root CA
+        certificates that can be used to validate identity certificate
+        chains:
+      </t>
+      <dl>
+        <dt>Intel</dt>
+        <dd>Provides EK CA certificates via a REST API for firmware
+        TPM (Platform Trust Technology / PTT) and discrete TPM
+        devices.  See
+        <eref target="https://trustedservices.intel.com/"/>.</dd>
+
+        <dt>AMD</dt>
+        <dd>AMD Security Processor key distribution for fTPM EK
+        validation.  See
+        <eref target="https://download.amd.com/sev/"/>.</dd>
+
+        <dt>Infineon</dt>
+        <dd>Infineon OPTIGA TPM certificates.  Root CA available via
+        Infineon's PKI.  See
+        <eref target="https://www.infineon.com/TPM"/>.</dd>
+
+        <dt>STMicroelectronics</dt>
+        <dd>Root certificates available through ST's TPM documentation
+        portal.</dd>
+
+        <dt>Nuvoton</dt>
+        <dd>Root certificates available through Nuvoton's security
+        products documentation.</dd>
+
+        <dt>Yubico</dt>
+        <dd>PIV attestation CA certificates for YubiKey devices.
+        See
+        <eref target="https://developers.yubico.com/PIV/Introduction/piv-attestation.html"/>.</dd>
+      </dl>
+      <t>
+        Receiving mail servers implementing this specification SHOULD
+        maintain a local trust store of hardware manufacturer root CAs,
+        updated periodically.  A community-maintained trust store
+        (analogous to Mozilla's CA certificate programme for TLS) would
+        benefit the ecosystem.  An open-source trust store project is
+        available at
+        <eref target="https://github.com/1id-com/tpm-manufacturer-cas"/>.
+      </t>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="other-transports">
+      <name>Appendix: Applicability to Other Transports</name>
+      <t>
+        The CMS attestation bundle (the "chain" value defined in
+        <xref target="header-format"/>) and the SD-JWT trust proof
+        (defined in <xref target="sd-jwt-header"/>) are self-contained
+        data structures whose verification algorithms
+        (<xref target="verification-algorithm"/> and
+        <xref target="sd-jwt-verification"/>) do not depend on email
+        semantics.  The body hash (bh) generalises to a content hash
+        over whatever payload the attestation covers.
+      </t>
+      <t>
+        Potential transport bindings include but are not limited to:
+      </t>
+      <dl>
+        <dt>HTTP</dt>
+        <dd>The CMS attestation bundle or SD-JWT trust proof could be
+        carried in HTTP request headers or in HTTP message bodies.
+        The content hash would cover the HTTP request or response
+        payload.  This binding is particularly relevant for API calls
+        by autonomous AI agents, where the receiving service benefits
+        from verifying that the request originated on attested
+        hardware.  The agent identity URN
+        (<xref target="agent-identity-format"/>) provides a persistent
+        key for cross-protocol reputation tracking.</dd>
+
+        <dt>Agent-to-Agent Protocols</dt>
+        <dd>Emerging protocols for AI agent communication -- tool
+        invocation, task delegation, capability discovery -- could
+        carry attestation evidence alongside each request, enabling
+        agents to verify each other's hardware trust level before
+        exchanging sensitive data or delegating privileged
+        operations.</dd>
+
+        <dt>WebSocket and Streaming Protocols</dt>
+        <dd>Attestation evidence could be presented during connection
+        establishment (e.g., in the WebSocket upgrade request) to
+        establish hardware trust for the duration of a persistent
+        connection.</dd>
+      </dl>
+      <t>
+        Detailed specification of these bindings is out of scope for
+        this document and is deferred to future companion documents.
+      </t>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="urn-registration">
+      <name>Appendix: URN Namespace Registration for "aid"</name>
+      <t>
+        This appendix provides the registration template for the "aid"
+        (Agent Identity) URN namespace, per
+        <xref target="RFC8141"/> Section 5.1.
+      </t>
+      <dl>
+        <dt>Namespace Identifier</dt>
+        <dd>aid</dd>
+
+        <dt>Version</dt>
+        <dd>1</dd>
+
+        <dt>Date</dt>
+        <dd>2026-02-28</dd>
+
+        <dt>Registrant</dt>
+        <dd>
+          <t>Crypt Inc. (Delaware C-Corp, operational since 2006)</t>
+          <t>Contact: Christopher Drake &lt;cnd@1id.com&gt;</t>
+          <t>URI: https://1id.com</t>
+          <t>The registrant is committed to long-term stewardship of
+          this namespace.  As the ecosystem of Issuers and verifiers
+          grows, the registrant intends to establish a multi-stakeholder
+          governance body to oversee namespace policy.  Interested
+          parties are invited to participate via the companion
+          repository at
+          https://github.com/1id-com/draft-drake-email-hardware-attestation.</t>
+        </dd>
+
+        <dt>Purpose</dt>
+        <dd>
+          <t>
+            The "aid" URN namespace provides persistent, globally
+            unique identifiers for autonomous agents, designed
+            specifically to enable reputation systems and Sybil-resistant
+            authentication across Internet protocols.
+          </t>
+          <t>
+            As AI agents become ubiquitous across email, APIs, and
+            Internet services, platforms need stable identifiers that:
+            (1) distinguish legitimate agents from malicious ones,
+            (2) accumulate reputation over time,
+            (3) are anchored to unique physical hardware where available,
+            and (4) support federated issuance by multiple independent
+            identity providers.
+          </t>
+          <t>
+            URNs in this namespace are bound to hardware security
+            components (TPM chips, PIV tokens, virtual TPMs) or to
+            software-managed keys at a lower trust tier.  The namespace
+            supports multiple issuers, each identified by a reverse-DNS
+            issuer-namespace within the URN structure.
+          </t>
+        </dd>
+
+        <dt>Syntax</dt>
+        <dd>
+          <t>See <xref target="agent-identity-format"/> for the
+          formal ABNF.  The general form is:</t>
+          <t><tt>urn:aid:{issuer-namespace}:{agent-id}</tt></t>
+          <t>where {issuer-namespace} is a reverse-DNS domain
+          (e.g., "com.1id") and {agent-id} is a DNS-label-syntax
+          identifier assigned by the Issuer (e.g.,
+          "1id-ty62muvf").</t>
+        </dd>
+
+        <dt>Assignment</dt>
+        <dd>
+          <t>
+            Agent identifiers are assigned by Issuers -- organisations
+            that operate enrollment services, verify hardware
+            attestation, and maintain anti-Sybil registries.  Any
+            organisation owning a DNS domain can operate as an Issuer.
+            Issuer-namespace uniqueness is guaranteed by DNS ownership.
+            Agent-id uniqueness within a namespace is guaranteed by the
+            Issuer's assignment policy.  An Issuer MUST NOT reassign an
+            agent-id, even after revocation.
+          </t>
+        </dd>
+
+        <dt>Security and Privacy</dt>
+        <dd>
+          <t>
+            See the Security Considerations
+            (<xref target="security-considerations"/>) of this
+            document.  Agent identity URNs are persistent and globally
+            unique by design, enabling long-term reputation tracking.
+            For privacy-sensitive contexts, SD-JWT selective disclosure
+            (<xref target="sd-jwt-proof"/>) allows agents to prove
+            trust properties without revealing their URN.
+          </t>
+        </dd>
+
+        <dt>Interoperability</dt>
+        <dd>
+          <t>
+            URNs in this namespace appear in: JWT sub claims (OpenID
+            Connect tokens), email headers (Hardware-Attestation,
+            Hardware-Trust-Proof), HTTP Authorization headers, and
+            reputation service APIs.  Standard URN parsers
+            (<xref target="RFC8141"/>) and standard JWT libraries
+            process these identifiers without modification.
+          </t>
+        </dd>
+
+        <dt>Resolution</dt>
+        <dd>
+          <t>
+            Resolution is OPTIONAL.  Issuers MAY provide resolution
+            services returning public identity metadata.  The resolution
+            URL is derived by reversing the issuer-namespace to obtain
+            the Issuer domain and appending a well-known path.
+            Resolution, when available, returns trust tier, registration
+            timestamp, and optional handle -- but never authentication
+            history or private data.
+          </t>
+        </dd>
+
+        <dt>Documentation</dt>
+        <dd>This document
+        (draft-drake-email-hardware-attestation-00).</dd>
+
+        <dt>Revision Information</dt>
+        <dd>Initial registration.</dd>
+      </dl>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="acknowledgements">
+      <name>Acknowledgements</name>
+      <t>
+        The concept of using hardware attestation for email sender
+        verification was developed in the context of building a
+        hardware identity registrar for autonomous AI agents.  The
+        author thanks the Trusted Computing Group for the TPM 2.0
+        specification, the authors of <xref target="RFC9901"/> (SD-JWT)
+        for the selective disclosure mechanism, the authors of
+        <xref target="RFC9334"/> (RATS Architecture) for establishing
+        the remote attestation architecture that this document builds
+        upon, and the authors of <xref target="RFC8141"/> (URN) for the
+        persistent identifier framework that underpins the federated
+        agent identity model.
+      </t>
+    </section>
+
+  </back>
+
+</rfc>
