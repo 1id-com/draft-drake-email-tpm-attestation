@@ -1,0 +1,129 @@
+Received: from w11vtpm.home (unknown [2001:8000:1bed:6d00:381f:a328:fe9d
+        :860e] (AS1221 Telstra Limited, AU))(using TLSv1.3 with cipher
+        TLS13_AES_256_GCM_SHA384) by mail.mailpal.com (Stalwart SMTP)
+        with ESMTPSA id 423AB909844F0D1; Thu, 26 Mar 2026 06:28:43 +0000
+Return-Path: <alice@example.un.ag>
+DKIM-Signature: v=1; a=rsa-sha256; s=rsa; d=example.un.ag;
+        c=relaxed/relaxed; r=y; h=Message-ID:Date:Subject:To:From;
+        t=1774506523; x=1775370523;
+        bh=t6uFMzcZhV+3fr99tSKnV1CYWnH47FK64RF9EcFXYnQ=; b=sSECW3y5QM+9R
+        etAUX4BiZfCHAD7Vg0YjQvnGQym35d0GwpO9UpvH3kUI0s8ckck0Gfx/GDMnBqye
+        cF22Ho/TmRtxYhjNXs1Hdspd97Gj9R89T4vbRTP4Se6AoeTCGY5sxEYkO/feYxau
+        rVTEvSlyBQTOyPteCQBIvu+LTOnfseQBWaXmQEmgRF0hLhSnPpestgFtxbPvq7W7
+        gpxet7GjEIs6nIrdjbeYDbY9izBkLFj6TcUuZbwMiH3KH01wm/qyx0KOoUP7g+5G
+        6zsaGuvrmuEgfcX1DMVxAIlHhTJB1nAnHtUStvm4j8t1F9YEUJKD1YCSgLJQ8WvQ
+        AJTTs/A0A==;
+Authentication-Results: mailpal.com; hw-attest=pass header.typ=VRT
+        header.alg=RS256 header.tier=virtual
+        header.aid=urn:aid:com.1id:1id-jq8c84k4
+Authentication-Results: mailpal.com; hw-trust=pass
+        header.trust_tier=virtual header.registry=1id.com
+From: Alice <alice@example.un.ag>
+To: bob@example.un.ag
+Subject: RFC Example 4/6: Virtual vTPM (Python, Mode 1+2)
+Date: Thu, 26 Mar 2026 17:28:00 +1100
+Message-ID: <177450648054.26936.15036271949777087817@mailpal.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+Hardware-Trust-Proof: eyJhbGciOiJFUzI1NiIsImtpZCI6IjFpZC1od2F0dGVzdC1lcz
+        I1Ni0xIiwidHlwIjoic2Qrand0In0.eyJpc3MiOiJodHRwczovLzFpZC5jb20iLC
+        JpYXQiOjE3NzQ1MDY0OTUsImV4cCI6MTc3NDUwNjc5NSwibm9uY2UiOiJxTjVwLT
+        VkcEd4ZUtxc3hqcEY3WTMxb2ZIeEN3VU1vaU9YYWV3S09OdjlnIiwiX3NkX2FsZy
+        I6InNoYS0yNTYiLCJfc2QiOlsiQ3VPNVBZb0lWMVVrS0RIWmlXOVpNSFJ4Q3hFRG
+        Y3UEYtZEU5WXJpVTlKbyJdfQ.rjfzv36TBpjz7fAazYElH06l2n_PpX1gGRUltXO
+        NzP-GX5leTEFvUALdxaEHQwq8GmLHM7gpavPS_C_QEF3m2w~WyJmMW1CeWY2LXdI
+        NWFkVDFoWmpDRDRBIiwidHJ1c3RfdGllciIsInZpcnR1YWwiXQ~
+X-1ID-Contact-Token: 4e2c70c6
+Hardware-Attestation: v=1; typ=VRT; alg=RS256; h=from:to:subject:date:me
+        ssage-id:content-transfer-encoding:content-type:mime-version:fro
+        m:to:subject:date:message-id:content-transfer-encoding:content-t
+        ype:mime-version; bh=FB8IXgMtG8UBjtblS5jLcFilBP9NoufFQV8ba9fsRLs
+        ; ts=1774506497; chain=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
+        363fAWD8wMLeAa5cJnYWjAL2ijM; aid=urn:aid:com.1id:1id-jq8c84k4
+
+RFC example 4 of 6: hardware email attestation per
+draft-drake-email-hardware-attestation-00.
+
+  Trust tier:  virtual (vTPM, typ=VRT)
+  Identity:    urn:aid:com.1id:1id-jq8c84k4
+  Device:      VMware virtual TPM (vTPM)
+  SDK:         Python (oneid-sdk) v1.3.2
+  Mode:        Combined (Mode 1 + Mode 2)
+  Headers:     Hardware-Attestation (Mode 1)
+               Hardware-Trust-Proof (Mode 2)
+
+What to look for:
+  - trust_tier=virtual in the SD-JWT.
+  - The virtual tier sits between sovereign
+    and declared: the TPM exists but is not
+    physically tamper-resistant.
+  - Hardware-Attestation is present because
+    the vTPM can still produce a valid AK
+    certificate chain.
+  - A verifier can distinguish virtual from
+    sovereign by inspecting the trust_tier
+    claim in the SD-JWT.

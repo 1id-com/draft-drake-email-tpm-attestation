@@ -3,9 +3,8 @@
 <rfc xmlns:xi="http://www.w3.org/2001/XInclude"
      docName="draft-drake-email-hardware-attestation-00"
      ipr="trust200902"
-     submissionType="IETF"
-     category="std"
-     consensus="true"
+     submissionType="independent"
+     category="exp"
      xml:lang="en"
      version="3">
 
@@ -17,18 +16,21 @@
     <seriesInfo name="Internet-Draft"
                 value="draft-drake-email-hardware-attestation-00"/>
 
-    <author fullname="Christopher Drake" initials="C." surname="Drake">
+    <author fullname="Christopher Drake" initials="C.N." surname="Drake">
       <organization>1id.com</organization>
       <address>
+        <postal>
+          <country>Australia</country>
+        </postal>
         <email>cnd@1id.com</email>
         <uri>https://1id.com</uri>
       </address>
     </author>
 
-    <date year="2026" month="March" day="19"/>
+    <date year="2026" month="March" day="26"/>
 
     <area>Security</area>
-    <workgroup>Internet Engineering Task Force</workgroup>
+    <workgroup/>
 
     <keyword>hardware attestation</keyword>
     <keyword>email</keyword>
@@ -214,6 +216,20 @@
           persistent, hardware-anchored identities defined here exist
           to enable receiving systems to build and query reputation
           over time, rewarding good behaviour and flagging bad.</dd>
+
+          <dt>Dual Trust Anchors</dt>
+          <dd>Both attestation modes deliberately provide the agent
+          identity (aid) and the hardware certificate or fingerprint
+          together.  Verifiers MAY choose which anchor to use as
+          their basis for trust decisions: the identity is the
+          primary key for reputation tracking and persists across
+          hardware migrations, while the hardware fingerprint is
+          IdP-independent and verifiable offline against manufacturer
+          root CAs.  Some verifiers will prefer the identity (for
+          accumulated reputation), others will prefer the hardware
+          (for IdP-independent assurance or cross-IdP correlation),
+          and high-assurance scenarios may require both.  This dual
+          provision is intentional, not redundant.</dd>
         </dl>
       </section>
 
@@ -306,18 +322,25 @@
 
           <dt>Trust Tier</dt>
           <dd>A classification of an agent's hardware trust level,
-          assigned by an Issuer.  Defined tiers include "sovereign"
-          (genuine non-virtual hardware TPM or discrete security
-          chip), "portable" (PIV smart card such as YubiKey),
-          "virtual" (hypervisor-provided virtual TPM), and "declared"
-          (software-only key, no hardware attestation).  Verifiers use
-          trust tiers to apply differentiated policy.  For identities
-          with multiple enrolled devices of different types, Issuers
-          that support multi-device identities MAY report the trust
-          tier of the device used for the most recent attestation
-          rather than a static assignment.  Verifiers SHOULD therefore
-          expect the same agent identity URN to appear with different
-          trust tier values over time.</dd>
+          assigned by an Issuer.  Defined tiers are grouped into
+          three compatibility classes, ordered from strongest to
+          weakest anti-Sybil resistance:
+          (a) "sovereign" (genuine non-virtual hardware TPM or
+          discrete security chip) and "portable" (PIV smart card such
+          as YubiKey) -- manufacturer-attested, persistent identity;
+          (b) "virtual" (hypervisor-provided virtual TPM) and
+          "enclave" (hardware enclave such as Apple Secure Enclave)
+          -- key isolation without anti-Sybil guarantee, as both
+          device types can be re-keyed at will;
+          (c) "declared" (software-only key, no hardware attestation).
+          Verifiers use trust tiers to apply differentiated policy.
+          For identities with multiple enrolled devices of different
+          types, Issuers that support multi-device identities MAY
+          report the trust tier of the device used for the most
+          recent attestation rather than a static assignment.
+          Verifiers SHOULD therefore expect the same agent identity
+          URN to appear with different trust tier values over
+          time.</dd>
 
           <dt>Sybil Attack</dt>
           <dd>An attack where a single adversary creates many
@@ -500,11 +523,17 @@ agent-id         = dns-label
       <section anchor="identity-hardware-cardinality">
         <name>Identity-to-Hardware Cardinality</name>
         <t>
-          The agent identity URN (aid) is the primary, stable
-          identifier for reputation tracking.  The hardware
-          fingerprint is an implementation detail that anchors the
-          identity to physical hardware.  The relationship between
-          these two identifiers is governed by the following rules:
+          The agent identity URN (aid) and the hardware fingerprint
+          serve as dual trust anchors (see "Dual Trust Anchors" in
+          <xref target="design-principles"/>).  The aid is the
+          primary, stable identifier for reputation tracking.  The
+          hardware fingerprint anchors the identity to physical
+          hardware and is independently verifiable against
+          manufacturer root CAs.  Both are provided together in
+          attestation headers so that verifiers may choose which
+          anchor to base trust decisions on.  The relationship
+          between these two identifiers is governed by the following
+          rules:
         </t>
         <dl>
           <dt>Many hardware devices MAY back one agent identity</dt>
@@ -535,16 +564,35 @@ agent-id         = dns-label
           <t>An Issuer MUST enforce trust tier compatibility when
           binding additional devices: all hardware devices backing a
           single agent identity MUST be of comparable trust tier.
-          Specifically, sovereign-tier hardware (typ=TPM) and
-          portable-tier hardware (typ=PIV) are compatible and MAY
-          back the same identity.  Virtual-tier hardware (typ=VRT)
-          MAY back the same identity as other virtual-tier devices
-          but MUST NOT be mixed with sovereign or portable
-          hardware.  Declared-tier keys (typ=SFT) MUST NOT be bound
-          to an identity that has any hardware-backed device.  This
-          constraint prevents an identity from simultaneously
-          claiming hardware-anchored trust and relying on
-          unprotected software keys.</t>
+          The defined compatibility groups are:
+          (a) sovereign (typ=TPM) and portable (typ=PIV) are
+          compatible and MAY back the same identity, as both provide
+          manufacturer-attested, tamper-resistant key storage;
+          (b) virtual (typ=VRT) and enclave (typ=ENC) are compatible
+          and MAY back the same identity, as neither provides
+          anti-Sybil guarantees (virtual TPMs can be instantiated
+          freely by the hypervisor operator, and hardware enclaves
+          lack a manufacturer attestation PKI that would prevent
+          re-keying);
+          (c) declared (typ=SFT) MUST NOT be bound to an identity
+          that has any other device type.
+          No cross-group mixing is permitted: a device from group (a)
+          MUST NOT coexist with a device from group (b) or (c), and
+          vice versa.</t>
+          <t>Upgrading an identity from a lower group to a higher
+          group (e.g., from group (b) to group (a), or from group (c)
+          to either hardware group) requires the permanent and
+          mandatory burning (retirement) of ALL devices from the
+          former group as part of the upgrade ceremony.  The Issuer
+          MUST NOT permit the identity to retain devices from both
+          groups simultaneously at any point during or after the
+          upgrade.  Additionally, upgrades that cross group boundaries
+          MUST include a co-presence cryptographic verification
+          between the existing device and the new device to ensure
+          that the same human or operator controls both.  Downgrading
+          from a higher group to a lower group (e.g., from group (a)
+          to group (b)) is forbidden; the Issuer MUST reject any
+          device addition that would constitute a downgrade.</t>
           <t>When an identity has multiple devices of compatible but
           different types (e.g., one sovereign TPM and one portable
           PIV), the trust_tier disclosed in attestation tokens
@@ -605,10 +653,13 @@ agent-id         = dns-label
         <t>
           This specification supports multiple hardware security
           technologies through a common abstraction.  Each mechanism
-          provides an identity certificate (signed by the manufacturer)
-          and a signing capability (used for per-message attestation).
-          The hardware type is declared in the attestation header via
-          the "typ" parameter.
+          provides an identity certificate and a signing capability
+          (used for per-message attestation).  For sovereign and
+          portable tiers, the identity certificate is signed by the
+          hardware manufacturer; for enclave and virtual tiers, the
+          identity certificate is issued by the Issuer.  The hardware
+          type is declared in the attestation header via the "typ"
+          parameter.
         </t>
         <table>
           <thead>
@@ -631,6 +682,12 @@ agent-id         = dns-label
               <td>PIV smart card (e.g., YubiKey)</td>
               <td>Device Attestation Certificate</td>
               <td>portable</td>
+            </tr>
+            <tr>
+              <td>ENC</td>
+              <td>Hardware enclave (e.g., Apple Secure Enclave)</td>
+              <td>Issuer-certified enclave key certificate</td>
+              <td>enclave</td>
             </tr>
             <tr>
               <td>VRT</td>
@@ -663,6 +720,31 @@ agent-id         = dns-label
           certificate is the device attestation certificate issued by
           the token manufacturer (e.g., Yubico).  The signing key is
           a PIV authentication key resident on the token.
+        </t>
+        <t>
+          For hardware enclave attestation (typ=ENC), the signing key
+          resides in a tamper-resistant hardware enclave integrated into
+          the device's system-on-chip (e.g., the Secure Enclave
+          Processor on Apple silicon).  Unlike discrete TPMs and PIV
+          tokens, hardware enclaves do not provide manufacturer-issued
+          identity certificates with a chain to a publicly available
+          root CA, and critically, they do not support persistent
+          attestation identities: the enclave key can be destroyed
+          and regenerated at will by the device owner.  This means
+          hardware enclaves provide NO anti-Sybil guarantee -- a
+          single device can generate an unlimited number of distinct
+          enclave keys over time.  For this reason, the "enclave"
+          trust tier is placed in the same compatibility group as
+          virtual TPMs (typ=VRT), which share the same re-keying
+          limitation.  The identity certificate for typ=ENC is
+          issued by the Issuer at enrollment time after verifying
+          that the key was generated inside the enclave using a
+          trust-on-first-use (TOFU) model.  Note that the Secure
+          Enclave performs internal hashing (ECDSA with SHA-256 over
+          the raw input rather than a pre-hashed digest);
+          implementations MUST pass the raw attestation-input bytes
+          (72 bytes) to the enclave signing function, NOT the
+          attestation-digest.
         </t>
         <t>
           For virtual TPM attestation (typ=VRT), the identity
@@ -822,6 +904,22 @@ Example DNS TXT record:
             The TXT record value uses a tag=value format with
             semicolon separators:
           </t>
+          <artwork type="abnf"><![CDATA[
+hwattest-record = hwattest-version ";" SP
+                  hwattest-alg ";" SP
+                  hwattest-key
+                  [";" SP hwattest-kid]
+                  [";" SP hwattest-status]
+
+hwattest-version = "v" "=" "hwattest1"
+hwattest-alg     = "alg" "=" jws-algorithm
+hwattest-key     = "p" "=" base64
+hwattest-kid     = "kid" "=" 1*VCHAR
+hwattest-status  = "t" "=" ("active" / "revoked")
+
+jws-algorithm    = "ES256" / "PS256" / "RS256"
+                   ; other JWS algorithms may be added
+          ]]></artwork>
           <dl>
             <dt>v</dt>
             <dd>REQUIRED.  Version.  MUST be "hwattest1".</dd>
@@ -997,7 +1095,7 @@ hw-attest-value = hw-version ";" SP
                   [";" SP hw-aid]
 
 hw-version     = "v" "=" "1"
-hw-type        = "typ" "=" ("TPM" / "PIV" / "VRT" / "SFT")
+hw-type        = "typ" "=" ("TPM" / "PIV" / "ENC" / "VRT" / "SFT")
 hw-algorithm   = "alg" "=" ("RS256" / "ES256" / "PS256")
 hw-signed-hdrs = "h" "=" hdr-name *(":" hdr-name)
 hw-body-hash   = "bh" "=" base64url
@@ -1024,9 +1122,10 @@ base64         = *( ALPHA / DIGIT / "+" / "/" / "=" )
           <dt>typ</dt>
           <dd>The hardware attestation mechanism type.  "TPM" for
           Trusted Platform Module (discrete or firmware), "PIV" for
-          Personal Identity Verification smart card, "VRT" for virtual
-          TPM, "SFT" for software-managed key.  Additional values MAY
-          be registered with IANA.</dd>
+          Personal Identity Verification smart card, "ENC" for hardware
+          enclave (e.g., Apple Secure Enclave), "VRT" for virtual TPM,
+          "SFT" for software-managed key.  Additional values MAY be
+          registered with IANA.</dd>
 
           <dt>alg</dt>
           <dd>The signature algorithm used by the AK.  MUST be one of
@@ -1065,13 +1164,24 @@ base64         = *( ALPHA / DIGIT / "+" / "/" / "=" )
 
           <dt>bh</dt>
           <dd>The base64url-encoded SHA-256 hash of the canonicalised
-          email body, computed using the same canonicalisation algorithm
-          as DKIM simple body canonicalisation
-          <xref target="RFC6376" section="3.4.3"/>.</dd>
+          email body, computed using DKIM simple body canonicalisation
+          exclusively (<xref target="RFC6376" section="3.4.3"/>).
+          DKIM relaxed body canonicalisation is NOT used for body
+          hashing in this specification; only simple canonicalisation
+          is supported, to ensure deterministic verification without
+          requiring a canonicalisation algorithm negotiation
+          parameter.</dd>
 
           <dt>ts</dt>
           <dd>Unix timestamp (seconds since 1970-01-01T00:00:00Z)
-          at which the attestation signature was created.</dd>
+          at which the attestation signature was created.
+          Unlike DKIM-Signature, this specification does not define a
+          sender-declared expiry tag (analogous to DKIM's x= parameter).
+          Verifiers SHOULD apply their own freshness policy based on ts
+          (e.g., rejecting attestations older than a configured threshold).
+          A future version of this specification MAY introduce an optional
+          expiry parameter if operational experience demonstrates the need
+          for sender-declared attestation lifetimes.</dd>
 
           <dt>chain</dt>
           <dd><t>A base64-encoded CMS SignedData structure
@@ -1178,9 +1288,20 @@ base64         = *( ALPHA / DIGIT / "+" / "/" / "=" )
             RECOMMENDED for direct SMTP delivery.  Verifiers SHOULD
             allow a wider window (up to 3600 seconds / 1 hour) for
             messages that have passed through intermediate MTAs, as
-            indicated by Received headers or queue delays.  If ts is
-            outside the acceptable window, the result is "fail"
-            (timestamp expired).
+            indicated by Received headers or queue delays.  Messages
+            delayed by greylisting (typically 15-30 minutes) or by
+            temporary MTA failures (potentially hours) may exceed even
+            this wider window.  Verifiers evaluating messages where the
+            cryptographic signature is valid but the timestamp has
+            expired SHOULD record the result as "pass" with an
+            informational note about the timestamp age, rather than a
+            hard "fail", because the signature's integrity is
+            unaffected by delivery delays.  Once the first inbound MTA
+            (the MX record host) has verified the attestation and
+            recorded the result in an Authentication-Results header,
+            downstream systems SHOULD rely on that recorded result
+            (potentially protected by ARC <xref target="RFC8617"/>)
+            rather than re-evaluating timestamps.
           </li>
           <li>
             Decode the base64 chain parameter to obtain the CMS
@@ -1301,8 +1422,8 @@ Authentication-Results: mx.example.com;
 
           <dt>header.tier</dt>
           <dd>The inferred trust tier based on the hardware type and
-          manufacturer.  Values: "sovereign", "portable", "virtual",
-          "declared".</dd>
+          manufacturer.  Values: "sovereign", "portable", "enclave",
+          "virtual", "declared".</dd>
 
           <dt>header.fp</dt>
           <dd>The SHA-256 hash of the identity certificate's public
@@ -1464,8 +1585,9 @@ sd-jwt-presentation = sd-jwt "~" *( disclosure "~" )
         <dl>
           <dt>trust_tier</dt>
           <dd>The sender's hardware trust classification.  Values
-          include "sovereign" (genuine non-virtual hardware),
-          "portable" (smart card / USB token), "virtual"
+          include "sovereign" (genuine non-virtual hardware TPM),
+          "portable" (smart card / USB token), "enclave" (hardware
+          enclave such as Apple Secure Enclave), "virtual"
           (hypervisor-provided), and "declared" (software-only).</dd>
 
           <dt>sub</dt>
@@ -1547,7 +1669,15 @@ sd-jwt-presentation = sd-jwt "~" *( disclosure "~" )
           each terminated with CRLF, then the
           Hardware-Trust-Proof header itself is appended last
           (canonicalised the same way, with its value replaced by
-          the empty string, without a trailing CRLF).
+          the empty string, without a trailing CRLF).  The value is
+          blanked because the SD-JWT token has not yet been obtained
+          at the time the nonce is computed (the nonce is an input to
+          the Issuer, which returns the SD-JWT that will become the
+          header value); the header name and field separator are
+          retained so that the choice of header is bound to the
+          nonce.  This is the same self-inclusion technique used by
+          DKIM-Signature (<xref target="RFC6376"/> Section 3.7) and
+          by Mode 1 (see <xref target="header-format"/>).
         </t>
         <t>
           The agent submits the computed nonce and proposed iat to
@@ -1615,8 +1745,18 @@ sd-jwt-presentation = sd-jwt "~" *( disclosure "~" )
             Verify that exp has not passed and iat is within an
             acceptable window.  Because Mode 2 SD-JWTs are
             per-message, the RECOMMENDED exp is 300 seconds after
-            iat; verifiers SHOULD reject tokens where exp exceeds
-            iat by more than 3600 seconds (1 hour).
+            iat; verifiers SHOULD reject tokens where the Issuer-set
+            exp exceeds iat by more than 600 seconds (indicating a
+            misconfigured Issuer).  However, the verifier's freshness
+            check against real-world clock time should accommodate
+            delivery delays: if the SD-JWT signature is valid and
+            the iat-to-exp span is reasonable but the current time
+            exceeds exp due to greylisting or queue delays, the
+            verifier SHOULD treat the result as "pass" with an
+            informational timestamp-age note rather than a hard
+            "fail" (see the corresponding guidance for Mode 1
+            timestamp validation in
+            <xref target="verification-algorithm"/>).
           </li>
           <li>
             For each disclosure present, verify that its hash matches
@@ -2104,9 +2244,9 @@ Authentication-Results: mx.example.com;
           Organisation: 1id.com (https://1id.com)
         </t>
         <t>
-          Description: An implementation of Mode 2 (SD-JWT Trust
-          Proof) as described in this draft, with Mode 1 (Direct
-          Hardware Attestation) in development.  The implementation
+          Description: An implementation of both Mode 1 (Direct
+          Hardware Attestation) and Mode 2 (SD-JWT Trust Proof)
+          as described in this draft.  The implementation
           includes server-side identity certificate chain validation
           against manufacturer root CAs (Intel, AMD, Infineon,
           STMicroelectronics, Nuvoton, Qualcomm, Yubico), anti-Sybil
@@ -2123,11 +2263,20 @@ Authentication-Results: mx.example.com;
           Maturity: Beta.  Deployed in production at https://1id.com.
         </t>
         <t>
-          Coverage: Mode 2 (SD-JWT Trust Proof) is fully implemented,
-          including transient-only AK model for TPM attestation with
-          no NV storage writes, multi-device identity management with
-          hardware lock, and per-message SD-JWT issuance.  Mode 1
-          (Direct Hardware Attestation via CMS) is in development.
+          Coverage: Both Mode 1 (Direct Hardware Attestation via CMS
+          SignedData) and Mode 2 (SD-JWT Trust Proof) are implemented
+          for TPM-backed identities (sovereign and virtual tiers) and
+          for Apple Secure Enclave (enclave tier).  Mode 2 is
+          additionally implemented for PIV/YubiKey (portable tier) and
+          declared (software-only) tiers.  Dynamic trust tiering is
+          supported: the same identity produces different trust_tier
+          claims depending on which device is used for authentication.
+          Features include transient-only AK model for TPM attestation
+          with no NV storage writes, multi-device identity management
+          with hardware lock, and per-message SD-JWT issuance.  Live
+          email examples from this implementation -- all independently
+          verifiable using the hw-attest-verify tool -- are included
+          in <xref target="appendix-live-examples"/>.
         </t>
         <t>
           Contact: Christopher Drake &lt;cnd@1id.com&gt;
@@ -2175,7 +2324,7 @@ Authentication-Results: mx.example.com;
       <section>
         <name>MailPal.com Verifier and Relay</name>
         <t>
-          Organisation: Crypt Inc. (https://mailpal.com)
+          Organisation: 1id.com (https://mailpal.com)
         </t>
         <t>
           Description: An email service (Stalwart Mail Server on
@@ -2195,13 +2344,22 @@ Authentication-Results: mx.example.com;
         </t>
         <t>
           Maturity: Alpha.  Mail infrastructure deployed at
-          https://mailpal.com; attestation header verification in
-          development.
+          https://mailpal.com; inbound attestation header verification
+          implemented via milter integration.
         </t>
         <t>
           Coverage: Mail transport infrastructure is operational.
-          Attestation header generation, submission validation, and
-          inbound verification are in development.
+          Inbound verification of both Mode 1 (CMS certificate chain)
+          and Mode 2 (SD-JWT trust proof) headers is implemented via a
+          pure-Python milter daemon that adds Authentication-Results
+          headers per <xref target="auth-results"/> and
+          <xref target="sd-jwt-auth-results"/>.  All five trust tiers
+          (sovereign, portable, enclave, virtual, declared) are
+          verified in production.  The Authentication-Results headers
+          embedded in the examples in
+          <xref target="appendix-live-examples"/> were generated by
+          this milter during live SMTP reception.  Attestation header
+          generation at submission time is in development.
         </t>
         <t>
           Contact: Christopher Drake &lt;cnd@1id.com&gt;
@@ -2211,11 +2369,15 @@ Authentication-Results: mx.example.com;
         </t>
         <ul>
           <li>
-            <strong>Attestation verification library:</strong>
+            <strong>Attestation verification library and CLI:</strong>
             <eref target="https://github.com/1id-com/hw-attest-verify"/> --
             Verification of Mode 1 CMS attestation bundles and
-            Mode 2 SD-JWT trust proofs.  Suitable for integration
-            into any MTA or mail filter.
+            Mode 2 SD-JWT trust proofs.  Published to PyPI as
+            "hw-attest-verify" (pip install hw-attest-verify).
+            Includes a command-line tool for verifying .eml files
+            and a library suitable for integration into any MTA
+            or mail filter.  Used to verify the live examples in
+            <xref target="appendix-live-examples"/>.
           </li>
         </ul>
       </section>
@@ -2251,17 +2413,89 @@ Authentication-Results: mx.example.com;
           "Email Authentication Methods" registry
           <xref target="RFC8601"/>:
         </t>
-        <dl>
-          <dt>hw-attest</dt>
-          <dd>Definition: this document,
+        <t>
+          Method: hw-attest.  Definition: this document,
           <xref target="auth-results"/>.
-          Applicable versions: 1.</dd>
-
-          <dt>hw-trust</dt>
-          <dd>Definition: this document,
+          ptype: header.  Properties:
+        </t>
+        <table>
+          <thead>
+            <tr>
+              <th>Property</th>
+              <th>Value Type</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>typ</td>
+              <td>token</td>
+              <td>Hardware attestation mechanism type (TPM, PIV, ENC, VRT, SFT)</td>
+            </tr>
+            <tr>
+              <td>alg</td>
+              <td>token</td>
+              <td>Signature algorithm (RS256, ES256, PS256)</td>
+            </tr>
+            <tr>
+              <td>mfr</td>
+              <td>token</td>
+              <td>Manufacturer code from identity certificate</td>
+            </tr>
+            <tr>
+              <td>tier</td>
+              <td>token</td>
+              <td>Inferred trust tier (sovereign, portable, enclave, virtual, declared)</td>
+            </tr>
+            <tr>
+              <td>fp</td>
+              <td>value</td>
+              <td>Truncated SHA-256 fingerprint of identity certificate public key</td>
+            </tr>
+            <tr>
+              <td>aid</td>
+              <td>value</td>
+              <td>Agent identity URN, if present</td>
+            </tr>
+          </tbody>
+        </table>
+        <t>
+          Result values: "pass" (all checks succeeded), "fail"
+          (cryptographic verification failed), "none" (header absent
+          or unparseable), "temperror" (transient verification error,
+          e.g., DNS timeout), "permerror" (permanent verification
+          error, e.g., unsupported version).
+        </t>
+        <t>
+          Method: hw-trust.  Definition: this document,
           <xref target="sd-jwt-auth-results"/>.
-          Applicable versions: 1.</dd>
-        </dl>
+          ptype: header.  Properties:
+        </t>
+        <table>
+          <thead>
+            <tr>
+              <th>Property</th>
+              <th>Value Type</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>trust_tier</td>
+              <td>token</td>
+              <td>Disclosed trust tier value, if revealed by the sender</td>
+            </tr>
+            <tr>
+              <td>registry</td>
+              <td>value</td>
+              <td>Issuer domain (derived from the iss claim)</td>
+            </tr>
+          </tbody>
+        </table>
+        <t>
+          Result values: "pass", "fail", "none", "temperror",
+          "permerror" (same semantics as hw-attest).
+        </t>
       </section>
 
       <section>
@@ -2270,7 +2504,12 @@ Authentication-Results: mx.example.com;
           IANA is requested to create a new registry titled "Hardware
           Attestation Type Values" with the following initial entries.
           New entries require Specification Required
-          (<xref target="RFC8126"/>).
+          (<xref target="RFC8126"/>).  The designated expert(s)
+          should be selected from the hardware security and email
+          authentication communities and should verify that proposed
+          values correspond to a distinct class of hardware security
+          mechanism with attestation capabilities not adequately
+          covered by existing entries.
         </t>
         <table>
           <thead>
@@ -2289,6 +2528,11 @@ Authentication-Results: mx.example.com;
             <tr>
               <td>PIV</td>
               <td>PIV smart card / USB token</td>
+              <td>this document</td>
+            </tr>
+            <tr>
+              <td>ENC</td>
+              <td>Hardware enclave (e.g., Apple Secure Enclave)</td>
               <td>this document</td>
             </tr>
             <tr>
@@ -2764,6 +3008,49 @@ Authentication-Results: mx.example.com;
           associations are stored.
         </t>
       </section>
+
+      <section anchor="priv-abuse-contact">
+        <name>Abuse-Resistant Contact Tokens</name>
+        <t>
+          Automated agents typically send from generated addresses
+          (e.g., aid-based mailbox names) that do not route to a
+          human operator.  When a recipient needs to report abuse or
+          request removal, there is no obvious contact path.
+          Conversely, exposing the operator's real email address in
+          every outbound message creates a spam and social-engineering
+          target.
+        </t>
+        <t>
+          Implementations MAY include a short-lived, opaque contact
+          token in outbound messages to bridge this gap.  A contact
+          token is a value that the Issuer can resolve to the
+          operator's real contact address without revealing that
+          address to the message recipient.  The token SHOULD be
+          rotated periodically (e.g., monthly) so that tokens from
+          old messages cannot be used to build a long-term contact
+          profile of the operator.
+        </t>
+        <t>
+          One approach is to carry the token in a header field
+          alongside the attestation headers.  For example, the
+          1id.com implementation uses an "X-1ID-Contact-Token"
+          header containing an 8-character HMAC-based token; a
+          recipient can send mail to
+          &lt;token&gt;@contact.&lt;issuer-domain&gt; and the Issuer
+          forwards it to the registered operator.  The token is
+          derived from the agent identity and a time-based rotation
+          key, so it is not linkable across rotation periods and
+          cannot be forged without the Issuer's secret.
+        </t>
+        <t>
+          This specification does not mandate a particular contact
+          token format or delivery mechanism.  Issuers that provide
+          contact tokens SHOULD document their token lifetime and
+          resolution procedure.  Recipients SHOULD treat contact
+          tokens as opaque values and SHOULD NOT attempt to derive
+          agent identity from them.
+        </t>
+      </section>
     </section>
 
   </middle>
@@ -2781,6 +3068,7 @@ Authentication-Results: mx.example.com;
       <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8141.xml"/>
       <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8174.xml"/>
       <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.8601.xml"/>
+      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.5322.xml"/>
       <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.9901.xml"/>
 
     </references>
@@ -2790,7 +3078,6 @@ Authentication-Results: mx.example.com;
 
       <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.1035.xml"/>
       <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.3156.xml"/>
-      <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.5322.xml"/>
       <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.5891.xml"/>
       <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.7208.xml"/>
       <xi:include href="https://bib.ietf.org/public/rfc/bibxml/reference.RFC.7489.xml"/>
@@ -2898,8 +3185,10 @@ Authentication-Results: mx.example.com;
         <eref target="https://trustedservices.intel.com/"/>.</dd>
 
         <dt>AMD</dt>
-        <dd>AMD Security Processor key distribution for fTPM EK
-        validation.  See
+        <dd>AMD fTPM EK certificates are available via
+        <eref target="https://ftpm.amd.com/pki/aia/"/>.  AMD
+        Secure Encrypted Virtualisation (SEV) attestation keys use
+        a separate distribution at
         <eref target="https://download.amd.com/sev/"/>.</dd>
 
         <dt>Infineon</dt>
@@ -2929,6 +3218,873 @@ Authentication-Results: mx.example.com;
         available at
         <eref target="https://github.com/1id-com/tpm-manufacturer-cas"/>.
       </t>
+    </section>
+
+    <!-- ====================================================== -->
+    <section anchor="appendix-live-examples">
+      <name>Appendix: Live Email Examples</name>
+      <t>
+        This appendix contains six complete email messages generated
+        by independent implementations of this specification.  Each
+        message was sent from alice@example.un.ag to
+        bob@example.un.ag using the 1id.com Issuer and verified by
+        the MailPal.com milter on receipt.  The messages are
+        reproduced verbatim from the receiving mail server's store;
+        all base64-encoded values, signatures, and certificate chains
+        are the original bytes as transmitted on 26 March 2026.
+      </t>
+      <t>
+        These are genuine, cryptographically verifiable messages.
+        Readers can independently verify every example using the
+        open-source hw-attest-verify tool
+        (<eref target="https://github.com/1id-com/hw-attest-verify"/>),
+        installable via "pip install hw-attest-verify".  For each
+        email file, run:
+      </t>
+      <artwork><![CDATA[
+$ python3 -m hw_attest_verify --auth-results --no-time-check \
+    --hostname mailpal.com < example.eml
+]]></artwork>
+      <t>
+        The --no-time-check flag disables token expiry enforcement,
+        since SD-JWT tokens have a five-minute lifetime and will have
+        expired by the time of reading.  Mode 1 (Hardware-Attestation)
+        verification has no time dependency and passes without this
+        flag.  The examples collectively demonstrate:
+      </t>
+      <ul>
+        <li>All five trust tiers (sovereign, portable, enclave,
+        virtual, declared).</li>
+        <li>Both SDK implementations (Python oneid-sdk and
+        Node.js 1id).</li>
+        <li>Mode 1 only, Mode 2 only, and Combined Mode
+        (Mode 1 + Mode 2).</li>
+        <li>Dynamic trust tiering (same identity at different
+        tiers on different devices).</li>
+        <li>Embedded Authentication-Results headers injected by the
+        MailPal.com verifier milter during SMTP reception.</li>
+      </ul>
+      <t>
+        Note on certificate chains: The Mode 1 (Hardware-Attestation)
+        examples contain CMS certificate chains rooted at the 1id.com
+        Issuer's own CA ("1ID Root CA A" / "1ID Intermediate CA A"),
+        not at hardware manufacturer root CAs (Intel, AMD, etc.).
+        This is because the 1id.com Issuer verifies the TPM or
+        enclave manufacturer certificate chain during enrollment and
+        then issues its own Issuer-certified AK certificate that
+        binds the AK public key to the verified hardware identity.
+        The resulting CMS chain is: AK Certificate (Issuer-signed) ->
+        Issuer Intermediate CA -> Issuer Root CA.  Deployments that
+        do not use an Issuer would instead include the full
+        manufacturer certificate chain as described in
+        <xref target="attestation-chain"/>.  Both chain formats are
+        valid; the Issuer-certified format provides the additional
+        assurance that the Issuer has verified the hardware binding
+        as part of its enrollment protocol.
+      </t>
+      <t>
+        NOTE TO RFC EDITOR: Please retain the examples in this
+        appendix but remove this note, the specific dates, and the
+        reference to "26 March 2026".  The examples are included as
+        a non-normative aid to implementers and reviewers, providing
+        complete, independently verifiable email messages
+        demonstrating all attestation modes and trust tiers.
+      </t>
+
+      <section anchor="example-email-1">
+        <name>Example 1: Sovereign-Tier TPM (Combined Mode, Node.js SDK)</name>
+        <t>
+          This message demonstrates Combined Mode (Mode 1 + Mode 2)
+          from a sovereign-tier identity backed by an Intel firmware
+          TPM.  The Hardware-Attestation header contains a CMS
+          SignedData bundle with an X.509 certificate chain rooted at
+          a manufacturer CA.  The Hardware-Trust-Proof header contains
+          an SD-JWT with a selectively disclosed trust_tier claim.
+          Both headers reference the same agent identity URN
+          (urn:aid:com.1id:1id-tkoie2ve).  Note that the From address
+          (alice@example.un.ag) is independent of the agent identity
+          URN, demonstrating the decoupling of email sender identity
+          and hardware identity.
+        </t>
+        <t>
+          Compare with Example 2 (same identity, different device and
+          trust tier) and Example 6 (same identity and device, Mode 1
+          only, Python SDK).
+        </t>
+        <figure>
+          <name>Example 1: Sovereign TPM, Combined Mode (Node.js SDK)</name>
+          <artwork type="email"><![CDATA[
+Received: from oneid-sdk (unknown [2001:8000:1bed:6d00:ecfa:f9e5:c8e3:ed
+        4f] (AS1221 Telstra Limited, AU))(using TLSv1.3 with cipher
+        TLS13_AES_256_GCM_SHA384) by mail.mailpal.com (Stalwart SMTP)
+        with ESMTPSA id 423AB698D84E8D1; Thu, 26 Mar 2026 06:27:23 +0000
+Return-Path: <alice@example.un.ag>
+DKIM-Signature: v=1; a=rsa-sha256; s=rsa; d=example.un.ag;
+        c=relaxed/relaxed; r=y; h=Message-ID:Date:Subject:To:From;
+        t=1774506443; x=1775370443; bh=+GNsqybwllZv8Ax0BtgYSg73F/3TnNOd8
+        lZ5Dlr7wJM=; b=bibpmNagEyVBbOaFHy6+roU+kMTxheiMcNrQfEhQq4EHMf1zE
+        E0zt/EwIohwEkm55Ajra4k834hqnvbxmT0/fzD+f/Uq5SP6dUp2m1KBSMrkYHVTD
+        LW0m7TqsCzKoFOJRQrP8HkXTGGlLZs8VOHwN+UFLBOrR0TebCSRZQldAMcUKfx3w
+        +/uopSKYF6BKvq1U1NDXDxIyrIiYJ9ma64VjMz/GIu8Aqg9CKg3DtiEIhKa4B+9m
+        Q4olARarM4B0n5HPKcib6UU/I8XXRnvynBFKIRc+MlVIXWsQYKbbQTBqMJRVy8fR
+        sdXANCTDhzV3UoO+EXUE4yXeba7xCWfdk6SQQ==;
+Authentication-Results: mailpal.com; hw-attest=pass header.typ=TPM
+        header.alg=RS256 header.tier=sovereign
+        header.aid=urn:aid:com.1id:1id-tkoie2ve
+Authentication-Results: mailpal.com; hw-trust=pass
+        header.trust_tier=sovereign header.registry=1id.com
+From: Alice <alice@example.un.ag>
+To: bob@example.un.ag
+Subject: RFC Example 1/6: Sovereign TPM (Node.js, Mode 1+2)
+Date: Thu, 26 Mar 2026 16:27:16 +1000
+Message-ID: <1774506436645.8ed455cf30df4796@mailpal.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+Hardware-Attestation: v=1; typ=TPM; alg=RS256; h=from:to:subject:date:me
+        ssage-id:content-transfer-encoding:content-type:mime-version:fro
+        m:to:subject:date:message-id:content-transfer-encoding:content-t
+        ype:mime-version; bh=D86x9X_Sdbjuiw4qHtNHgn_D9ddyl18jiIMSUqhmnDY
+        ; ts=1774506440; chain=MIIMAQYJKoZIhvcNAQcCoIIL8jCCC+4CAQExDzANB
+        glghkgBZQMEAgEFADALBgkqhkiG9w0BBwGgggpWMIID4TCCAsmgAwIBAgIUH01pf
+        nWQCIfMiHfTNQb7v7r3CmMwDQYJKoZIhvcNAQELBQAwLjEMMAoGA1UECgwDMUlEM
+        R4wHAYDVQQDDBUxSUQgSW50ZXJtZWRpYXRlIENBIEEwHhcNMjYwMzIwMTYzNjI2W
+        hcNMjcwMzIwMTYzNjI2WjBMMQwwCgYDVQQKDAMxSUQxJTAjBgNVBAMMHHVybjpha
+        WQ6Y29tLjFpZDoxaWQtdGtvaWUydmUxFTATBgNVBAUTDDFpZC10a29pZTJ2ZTCCA
+        SIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBANvysXC8ILSnhGcqg66dWKWQL
+        p9pOJZmj6yTbICDVLydBwc1LGEQAW3BCee6XU/Bs0n91uROJCQw3jgrCMiBUOvS6
+        Mjox/8NT1gfZ9sDQGVXN5gQ0t9H+r9vEPJ7YL9jhYmlxWQp+fS6vhZNrmH7g4XwE
+        K+EsbMsc8H0ZuxKAM1S7p9447G9IOZOkFMK33ZxCCY00DFmwzXu/dkGFfuOaSWM5
+        cazWz/kxqOtcpT73ACmJxQ6LU3yzB6VwbfwCWm6klQNKsd1c7FT5hX5ZYtEqDXeI
+        pIGWyQp9TQgNbUIPeJCWO2rDLmh0ZXwqXR4yBqKeNWhUjrcnfQgNfrjJ7zB0z8CA
+        wEAAaOB2DCB1TAnBgNVHREEIDAehhx1cm46YWlkOmNvbS4xaWQ6MWlkLXRrb2llM
+        nZlMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBRroL9zk
+        1MDMjMG4UyIvjZdzdX8QTAfBgNVHSMEGDAWgBRnIsB54FVyNiezRKLzTN+AXd+Wr
+        jAXBgorBgEEAYPUXwEBBAlzb3ZlcmVpZ24wIgYKKwYBBAGD1F8BAgQUMjAyNi0wM
+        y0wNFQwMDowMDowMFowDwYKKwYBBAGD1F8BAwQBADANBgkqhkiG9w0BAQsFAAOCA
+        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
+        33OqpMiDIFfeI0pgKVYzvoVmWi+Tyc=; aid=urn:aid:com.1id:1id-tkoie2v
+        e 
+Hardware-Trust-Proof: eyJhbGciOiJFUzI1NiIsImtpZCI6IjFpZC1od2F0dGVzdC1lcz
+        I1Ni0xIiwidHlwIjoic2Qrand0In0.eyJpc3MiOiJodHRwczovLzFpZC5jb20iLC
+        JpYXQiOjE3NzQ1MDY0MzksImV4cCI6MTc3NDUwNjczOSwibm9uY2UiOiJVRnh4bF
+        hwUTR6dGg3ejlZSlRkWFRONTlKbWw0RFVheXVockdiUFotWHhNIiwiX3NkX2FsZy
+        I6InNoYS0yNTYiLCJfc2QiOlsidGdCX3B5RFpuLVQtRGFlQlpONXFyNk5PTldZZG
+        00Y3hOWUx1ZDBPT0ZDUSJdfQ.1Ojz34CEn-8nzpGGQf0R321yM1OMsguAkvc3lyq
+        GagSWltkPKC6xb_MfETNilB-WQeHGffZQknrhwy-9mamFAA~WyJqN1AtQUFvc0RY
+        dHpld0hvOTlGcE9RIiwidHJ1c3RfdGllciIsInNvdmVyZWlnbiJd~
+X-1ID-Contact-Token: 8d0f52ce
+
+RFC example 1 of 6: hardware email attestation per
+draft-drake-email-hardware-attestation-00.
+
+  Trust tier:  sovereign (hardware TPM, typ=TPM)
+  Identity:    urn:aid:com.1id:1id-tkoie2ve
+  Device:      Intel firmware TPM (PTT)
+  SDK:         Node.js (1id npm package) v1.3.1
+  Mode:        Combined (Mode 1 + Mode 2)
+  Headers:     Hardware-Attestation (Mode 1)
+               Hardware-Trust-Proof (Mode 2)
+
+What to look for:
+  - Hardware-Attestation: CMS SignedData bundle
+    with X.509 chain rooted at manufacturer CA.
+  - Hardware-Trust-Proof: SD-JWT with selectively
+    disclosed trust_tier claim.
+  - Both headers share the same aid URN.
+  - From (alice@example.un.ag) differs from the
+    aid URN -- sender and hardware identity are
+    decoupled by design.
+  - Compare with example 6 (same identity/device,
+    Mode 1 only, Python SDK).
+
+]]></artwork>
+        </figure>
+      </section>
+
+      <section anchor="example-email-2">
+        <name>Example 2: Portable-Tier PIV/YubiKey (Mode 2 Only, Python SDK)</name>
+        <t>
+          This message uses the same agent identity as Example 1
+          (urn:aid:com.1id:1id-tkoie2ve) but was authenticated via a
+          Yubico YubiKey 5 (PIV slot 9a) on a different physical
+          machine.  The trust_tier in the Authentication-Results is
+          "portable" (not "sovereign"), demonstrating dynamic trust
+          tiering: the tier reflects the device used for the current
+          authentication, not the highest tier the identity is capable
+          of.  Only Mode 2 (Hardware-Trust-Proof) is present because
+          PIV-based CMS signing is not yet implemented in the
+          reference SDK.
+        </t>
+        <figure>
+          <name>Example 2: Portable PIV/YubiKey, Mode 2 (Python SDK)</name>
+          <artwork type="email"><![CDATA[
+Received: from moonmac.home (unknown [2001:8000:1bed:6d00:d1b:716c:55b1:
+        1044] (AS1221 Telstra Limited, AU))(using TLSv1.2 with cipher
+        TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384) by mail.mailpal.com
+        (Stalwart SMTP) with ESMTPSA id 423B3B18EE530D1; Thu, 26 Mar
+        2026 07:39:45 +0000
+Return-Path: <alice@example.un.ag>
+DKIM-Signature: v=1; a=rsa-sha256; s=rsa; d=example.un.ag;
+        c=relaxed/relaxed; r=y; h=Message-ID:Date:Subject:To:From;
+        t=1774510785; x=1775374785; bh=JzFuOSIpa6v/f7VY5FQ2+pcMkBmkx7MBh
+        bMjnGbhwmI=; b=zUgy4VRUk2VvQm2ZbXx+cgMJrjKQ8w8p0JfwrzFFrQZOzZviP
+        kT3TTv2gVTYRedADt3Oz/3pBUhcU4/hm1SsNO1gEPeedp1zll8UFDkM4gmBfEyCd
+        syvbv/TFVd4tp6aFcnsrY+/vR1yQ6Qnpbl96YLSiXqLtcR5BKf4egRmn+kjcMaiS
+        YVhXAvfIgLqauecNPiuQVMNW+bTs/sYp5fVOP122gw4AdgBlsL335xnzU+WV7xkl
+        ANTNPXYX7jbQ0Eb1g4ml/2cWzi7Hvp/AnuA1fzi7FCXlBHTnKuFBxCKfrvjUVkad
+        4mK/+RPprb4/9LCO8UI4cFMdVi+bDQQCaZnyQ==;
+Authentication-Results: mailpal.com; hw-trust=pass
+        header.trust_tier=portable header.registry=1id.com
+From: Alice <alice@example.un.ag>
+To: bob@example.un.ag
+Subject: RFC Example 2/6: Portable PIV (Python, Mode 2)
+Date: Thu, 26 Mar 2026 17:39:37 +1000
+Message-ID: <177451077748.22538.12383034578129922803@mailpal.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+Hardware-Trust-Proof: eyJhbGciOiJFUzI1NiIsImtpZCI6IjFpZC1od2F0dGVzdC1lcz
+        I1Ni0xIiwidHlwIjoic2Qrand0In0.eyJpc3MiOiJodHRwczovLzFpZC5jb20iLC
+        JpYXQiOjE3NzQ1MTA3ODAsImV4cCI6MTc3NDUxMTA4MCwibm9uY2UiOiJxTUlQQk
+        FrOWFYU2ljTmZpTnRlVlpzcHVoRV9HX1U5a3FXRndPWDBnTFFJIiwiX3NkX2FsZy
+        I6InNoYS0yNTYiLCJfc2QiOlsiang2ZnNmemtWTXYzVDZENmk1ZTYyd0xuN09xan
+        M5NkF0V0IwR0tPcXlmRSJdfQ.F3s1ojJtpOeDNTWNLVriHdEOoUlb9HTl-hBCpp6
+        pDms6GPRUjxcUXlibBXrjuSsfaEyEWA17d-rToZzz-ECcCg~WyJ2U2RVMzQ0SFNU
+        R1AtT0Vwb0VpdE53IiwidHJ1c3RfdGllciIsInBvcnRhYmxlIl0~
+X-1ID-Contact-Token: 8d0f52ce
+
+RFC example 2 of 6: hardware email attestation per
+draft-drake-email-hardware-attestation-00.
+
+  Trust tier:  portable (PIV/YubiKey, typ=PIV)
+  Identity:    urn:aid:com.1id:1id-tkoie2ve
+  Device:      YubiKey 5 NFC (PIV slot 9a)
+  SDK:         Python (oneid-sdk) v1.3.3
+  Mode:        Mode 2 only (SD-JWT trust proof)
+  Header:      Hardware-Trust-Proof only
+
+What to look for:
+  - Same identity (aid) as examples 1 and 6,
+    but a different trust_tier (portable).
+  - This identity is deliberately shared across
+    two machines (RoG via TPM, moonmac via PIV).
+    A multi-server bulk-mail operation may want
+    a single identity across all its servers so
+    that they accrue a common reputation.
+  - Dynamic trust tiering: the tier reflects
+    the device used now, not the highest tier
+    the identity has ever used.
+  - Only Hardware-Trust-Proof is present;
+    Mode 1 direct attestation is not yet
+    supported for PIV-based signing.
+  - The From address (alice@example.un.ag)
+    differs from the aid URN.
+
+]]></artwork>
+        </figure>
+      </section>
+
+      <section anchor="example-email-3">
+        <name>Example 3: Enclave-Tier Secure Enclave (Combined Mode, Python SDK)</name>
+        <t>
+          This message demonstrates Combined Mode (Mode 1 + Mode 2)
+          from an enclave-tier identity (urn:aid:com.1id:1id-xiz43mxz)
+          backed by the Apple Secure Enclave on a Mac mini (M2).  The
+          Hardware-Attestation header contains a CMS SignedData bundle
+          with an ECDSA P-256 key held in the Secure Enclave.  Note
+          that typ=ENC in the header signals to verifiers that the
+          Secure Enclave performs internal hashing (ECDSA with
+          SHA-256 over the raw input rather than a pre-hashed digest),
+          which affects the verification algorithm for this tier.  The
+          Hardware-Trust-Proof SD-JWT discloses trust_tier="enclave".
+          The enclave tier shares a compatibility group with virtual
+          (vTPM), as neither provides anti-Sybil guarantees (both
+          device types can be re-keyed at will by the device owner).
+        </t>
+        <t>
+          This is a different identity than Examples 1, 2, and 6,
+          because this device has its own independent enrollment.
+        </t>
+        <figure>
+          <name>Example 3: Enclave Secure Enclave, Combined Mode (Python SDK)</name>
+          <artwork type="email"><![CDATA[
+Received: from mac-mini.local (unknown [2001:8000:1bed:6d00:450f:3a6d:4e
+        35:1278] (AS1221 Telstra Limited, AU)) (using TLSv1.3 with
+        cipher TLS13_AES_256_GCM_SHA384) by mail.mailpal.com (Stalwart
+        SMTP) with ESMTPSA id 423D31DF50596D1;Thu, 26 Mar 2026 12:14:20
+        +0000
+Return-Path: <alice@example.un.ag>
+DKIM-Signature: v=1; a=rsa-sha256; s=rsa; d=example.un.ag;
+        c=relaxed/relaxed; r=y; h=Message-ID:Date:Subject:To:From;
+        t=1774527260; x=1775391260;
+        bh=feAv3I/4jG+E7MfQ0QJxgCWsB9rHO4ir7LMH7xA1+2s=;
+        b=H1h/DqUDa05dK7egaOvsnoxX5JQsjTL6hzhFSDBFe6SsouUWSOCSHclvNSOJCq
+        SNrLh1yOnR/Cu7KfVatydr/wF3vRfAWPZok9ek3ZT0umuMD6C4taM5l57CHQAPlo
+        7j6lJ47NAQb+LVCF+H+37Tl8WNWvUUlSOW2xc1ZHxT+6rFx+yWGgdj6oY3zNT6S5
+        h1HmQL3Brn0sOCQdM2Scjm7KEZxz8OJr53a9mPj+/Yv/A4JP67qa13dq5JLHDz+d
+        FGIQniUo77yAY5jpgg4CrBx1b16OhzT+0hahlPJtVOWovJYS/DL0DLHXRgbcCa6U
+        5CTMnmxfp6+DzzJ2sMhzwKhg==;
+Authentication-Results: mailpal.com; hw-attest=pass header.typ=ENC
+        header.alg=ES256 header.tier=enclave
+        header.aid=urn:aid:com.1id:1id-xiz43mxz
+Authentication-Results: mailpal.com; hw-trust=pass
+        header.trust_tier=enclave header.registry=1id.com
+From: Alice <alice@example.un.ag>
+To: bob@example.un.ag
+Subject: RFC Example 3/6: Enclave (Python, Mode 1+2)
+Date: Thu, 26 Mar 2026 22:14:10 +1000
+Message-ID: <177452725007.16358.11744115580712301841@mailpal.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+Hardware-Trust-Proof: eyJhbGciOiJFUzI1NiIsImtpZCI6IjFpZC1od2F0dGVzdC1lcz
+        I1Ni0xIiwidHlwIjoic2Qrand0In0.eyJpc3MiOiJodHRwczovLzFpZC5jb20iLC
+        JpYXQiOjE3NzQ1MjcyNTUsImV4cCI6MTc3NDUyNzU1NSwibm9uY2UiOiIxRFA3TV
+        czYVN0WTdzRzltbDdlUVJJXzh4WU9xNVplWDJZOUw1dWxLQ3BrIiwiX3NkX2FsZy
+        I6InNoYS0yNTYiLCJfc2QiOlsiM1J6WWl4bmVjNHFPdGdYSjU1ZTRTS2FtVWtWSG
+        RGUGZYUkNLMEx0U2dxdyJdfQ.svOUXSI3K4qpFhkIshqqcJ-EJ3erFZWO4S_jhuX
+        GFtrmiNmkx_F9czvoNYIeTPDi7mbXcMDjyOg3niHabToNEg~WyJ3eTRuZ1Yxb1A5
+        bWhpQmlZTUdEYUlBIiwidHJ1c3RfdGllciIsImVuY2xhdmUiXQ~
+X-1ID-Contact-Token: 69aea95a
+Hardware-Attestation: v=1; typ=ENC; alg=ES256;
+        h=from:to:subject:date:message-id:content-transfer-encoding:cont
+        ent-type:mime-version:from:to:subject:date:message-id:content-tr
+        ansfer-encoding:content-type:mime-version;
+        bh=NoBLb0ghkIoYnL6DZMKhTd4PGygEyah4fcuBEbXYnrw; ts=1774527256;
+        chain=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;
+        aid=urn:aid:com.1id:1id-xiz43mxz
+
+RFC example 3 of 6: hardware email attestation per
+draft-drake-email-hardware-attestation-00.
+
+  Trust tier:  enclave (Apple Secure Enclave)
+  Identity:    urn:aid:com.1id:1id-xiz43mxz
+  Device:      Apple Mac mini (M2, SE P256)
+  SDK:         Python (oneid-sdk) v1.3.4
+  Mode:        Combined (Mode 1 + Mode 2)
+  Headers:     Hardware-Attestation (Mode 1)
+               Hardware-Trust-Proof (Mode 2)
+
+What to look for:
+  - trust_tier=enclave in the SD-JWT.
+  - The enclave tier shares a compatibility
+    group with virtual (vTPM): both provide
+    key isolation but lack anti-Sybil
+    guarantees (re-keyable at will).
+  - Hardware-Attestation carries a CMS
+    SignedData bundle with the SE-backed
+    ECDSA P-256 key and certificate chain.
+  - A different identity than examples 1/6
+    (this device has its own enrollment).
+
+]]></artwork>
+        </figure>
+      </section>
+
+      <section anchor="example-email-4">
+        <name>Example 4: Virtual-Tier vTPM (Combined Mode, Python SDK)</name>
+        <t>
+          This message demonstrates Combined Mode from a virtual-tier
+          identity backed by a VMware virtual TPM (vTPM).  The
+          Hardware-Attestation header uses typ=VRT (not typ=TPM),
+          allowing verifiers to distinguish virtual from physical TPMs.
+          The certificate chain is issuer-signed rather than rooted at
+          a hardware manufacturer CA, since no physical manufacturer is
+          involved.  Receiving servers MAY apply different policy to
+          virtual-tier attestations compared to sovereign or portable
+          tiers.
+        </t>
+        <figure>
+          <name>Example 4: Virtual vTPM, Combined Mode (Python SDK)</name>
+          <artwork type="email"><![CDATA[
+Received: from w11vtpm.home (unknown [2001:8000:1bed:6d00:381f:a328:fe9d
+        :860e] (AS1221 Telstra Limited, AU))(using TLSv1.3 with cipher
+        TLS13_AES_256_GCM_SHA384) by mail.mailpal.com (Stalwart SMTP)
+        with ESMTPSA id 423AB909844F0D1; Thu, 26 Mar 2026 06:28:43 +0000
+Return-Path: <alice@example.un.ag>
+DKIM-Signature: v=1; a=rsa-sha256; s=rsa; d=example.un.ag;
+        c=relaxed/relaxed; r=y; h=Message-ID:Date:Subject:To:From;
+        t=1774506523; x=1775370523;
+        bh=t6uFMzcZhV+3fr99tSKnV1CYWnH47FK64RF9EcFXYnQ=; b=sSECW3y5QM+9R
+        etAUX4BiZfCHAD7Vg0YjQvnGQym35d0GwpO9UpvH3kUI0s8ckck0Gfx/GDMnBqye
+        cF22Ho/TmRtxYhjNXs1Hdspd97Gj9R89T4vbRTP4Se6AoeTCGY5sxEYkO/feYxau
+        rVTEvSlyBQTOyPteCQBIvu+LTOnfseQBWaXmQEmgRF0hLhSnPpestgFtxbPvq7W7
+        gpxet7GjEIs6nIrdjbeYDbY9izBkLFj6TcUuZbwMiH3KH01wm/qyx0KOoUP7g+5G
+        6zsaGuvrmuEgfcX1DMVxAIlHhTJB1nAnHtUStvm4j8t1F9YEUJKD1YCSgLJQ8WvQ
+        AJTTs/A0A==;
+Authentication-Results: mailpal.com; hw-attest=pass header.typ=VRT
+        header.alg=RS256 header.tier=virtual
+        header.aid=urn:aid:com.1id:1id-jq8c84k4
+Authentication-Results: mailpal.com; hw-trust=pass
+        header.trust_tier=virtual header.registry=1id.com
+From: Alice <alice@example.un.ag>
+To: bob@example.un.ag
+Subject: RFC Example 4/6: Virtual vTPM (Python, Mode 1+2)
+Date: Thu, 26 Mar 2026 17:28:00 +1100
+Message-ID: <177450648054.26936.15036271949777087817@mailpal.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+Hardware-Trust-Proof: eyJhbGciOiJFUzI1NiIsImtpZCI6IjFpZC1od2F0dGVzdC1lcz
+        I1Ni0xIiwidHlwIjoic2Qrand0In0.eyJpc3MiOiJodHRwczovLzFpZC5jb20iLC
+        JpYXQiOjE3NzQ1MDY0OTUsImV4cCI6MTc3NDUwNjc5NSwibm9uY2UiOiJxTjVwLT
+        VkcEd4ZUtxc3hqcEY3WTMxb2ZIeEN3VU1vaU9YYWV3S09OdjlnIiwiX3NkX2FsZy
+        I6InNoYS0yNTYiLCJfc2QiOlsiQ3VPNVBZb0lWMVVrS0RIWmlXOVpNSFJ4Q3hFRG
+        Y3UEYtZEU5WXJpVTlKbyJdfQ.rjfzv36TBpjz7fAazYElH06l2n_PpX1gGRUltXO
+        NzP-GX5leTEFvUALdxaEHQwq8GmLHM7gpavPS_C_QEF3m2w~WyJmMW1CeWY2LXdI
+        NWFkVDFoWmpDRDRBIiwidHJ1c3RfdGllciIsInZpcnR1YWwiXQ~
+X-1ID-Contact-Token: 4e2c70c6
+Hardware-Attestation: v=1; typ=VRT; alg=RS256; h=from:to:subject:date:me
+        ssage-id:content-transfer-encoding:content-type:mime-version:fro
+        m:to:subject:date:message-id:content-transfer-encoding:content-t
+        ype:mime-version; bh=FB8IXgMtG8UBjtblS5jLcFilBP9NoufFQV8ba9fsRLs
+        ; ts=1774506497; chain=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
+        363fAWD8wMLeAa5cJnYWjAL2ijM; aid=urn:aid:com.1id:1id-jq8c84k4
+
+RFC example 4 of 6: hardware email attestation per
+draft-drake-email-hardware-attestation-00.
+
+  Trust tier:  virtual (vTPM, typ=VRT)
+  Identity:    urn:aid:com.1id:1id-jq8c84k4
+  Device:      VMware virtual TPM (vTPM)
+  SDK:         Python (oneid-sdk) v1.3.2
+  Mode:        Combined (Mode 1 + Mode 2)
+  Headers:     Hardware-Attestation (Mode 1)
+               Hardware-Trust-Proof (Mode 2)
+
+What to look for:
+  - trust_tier=virtual in the SD-JWT.
+  - The virtual tier sits between sovereign
+    and declared: the TPM exists but is not
+    physically tamper-resistant.
+  - Hardware-Attestation is present because
+    the vTPM can still produce a valid AK
+    certificate chain.
+  - A verifier can distinguish virtual from
+    sovereign by inspecting the trust_tier
+    claim in the SD-JWT.
+
+]]></artwork>
+        </figure>
+      </section>
+
+      <section anchor="example-email-5">
+        <name>Example 5: Declared-Tier Software-Only (Mode 2 Only, Python SDK)</name>
+        <t>
+          This message demonstrates a declared-tier identity where the
+          signing key is stored in software with no hardware
+          protection.  Only Mode 2 (Hardware-Trust-Proof) succeeded;
+          Mode 1 failed because the EdDSA algorithm used by this
+          identity's software key is not yet supported in the
+          reference SDK's CMS implementation.  The SD-JWT discloses
+          trust_tier="declared", allowing receiving servers to apply
+          differentiated policy (e.g., lower reputation weight).
+          Declared-tier identities still participate in reputation
+          tracking, but without hardware-backed Sybil resistance.
+        </t>
+        <figure>
+          <name>Example 5: Declared Software-Only, Mode 2 (Python SDK)</name>
+          <artwork type="email"><![CDATA[
+Received: from RoG.localdomain (unknown [2001:8000:1bed:6d00:ecfa:f9e5:c
+        8e3:ed4f] (AS1221 Telstra Limited, AU))(using TLSv1.3 with
+        cipher TLS13_AES_256_GCM_SHA384) by mail.mailpal.com (Stalwart
+        SMTP) with ESMTPSA id 423ADB058650CD1; Thu, 26 Mar 2026 06:47:16
+        +0000
+Return-Path: <alice@example.un.ag>
+DKIM-Signature: v=1; a=rsa-sha256; s=rsa; d=example.un.ag;
+        c=relaxed/relaxed; r=y; h=Message-ID:Date:Subject:To:From;
+        t=1774507636; x=1775371636;
+        bh=tQbweOdhmIKnVJeZ2WfV+dXtsk7S4L1RTzicUBPYEuk=; b=6yNSGTOK1IodR
+        J59Jbhd9F/mFwrvJeGPv1C3sKb4eZKbPmYBQtdDjWuo4VknvsiZOE3uowJV6HitJ
+        xCwd3ORAby9tMH4CX+U8aaPrcu24pGxRGP3qHKuJcj3LtnktSj3/RBwipjX7roqu
+        gwZwEwJMBN8I6ilXN7GiC9F03AOfuraBSAUw+4CMk6oHl6tK2jeEXKu0VAHg0tOT
+        qX05HOl4VTEy6meCKlXDRvJJO+iakUBa0udVtHMthHQYkBsGnNoBllUgXSpgXdxg
+        nuAx1oVMpuZUdjBJZdtC5xpeZsupW4myKjfEP4lUuh00o5j4MbCZqUWAr0xriMpz
+        2rD7EWaAw==;
+Authentication-Results: mailpal.com; hw-trust=pass
+        header.trust_tier=declared header.registry=1id.com
+From: Alice <alice@example.un.ag>
+To: bob@example.un.ag
+Subject: RFC Example 5/6: Declared tier (Python, Mode 2)
+Date: Thu, 26 Mar 2026 16:47:11 +1000
+Message-ID: <177450763154.21623.9499316015451560959@mailpal.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+Hardware-Trust-Proof: eyJhbGciOiJFUzI1NiIsImtpZCI6IjFpZC1od2F0dGVzdC1lcz
+        I1Ni0xIiwidHlwIjoic2Qrand0In0.eyJpc3MiOiJodHRwczovLzFpZC5jb20iLC
+        JpYXQiOjE3NzQ1MDc2MzIsImV4cCI6MTc3NDUwNzkzMiwibm9uY2UiOiIxV040Q1
+        RsRERubUVkdDM2NXFSZXl6dk1mX21VMVFjak82Y1dGMVRfNDg4IiwiX3NkX2FsZy
+        I6InNoYS0yNTYiLCJfc2QiOlsieGt6MXhiTnhJbmZMWXdObzZ6dWNtTjVhbVB0VH
+        FCaDFWOE4xYVQ4cy1BOCJdfQ.DxUzkzn3Bh33Nt-Tpq7YLkKYkYutLJyNgj3jJYG
+        KuKNv-MoMuFXpnhlpVnG5qasrIb_TRJDmAGifvnOBzV5ubA~WyI4VGUwNHd4cHpL
+        YU9POURQaVhfZXBnIiwidHJ1c3RfdGllciIsImRlY2xhcmVkIl0~
+X-1ID-Contact-Token: c9f0a68c
+
+RFC example 5 of 6: hardware email attestation per
+draft-drake-email-hardware-attestation-00.
+
+  Trust tier:  declared (software key, typ=SFT)
+  Identity:    urn:aid:com.1id:1id-zrw4psyg
+  Device:      Software-only (Ed25519 key)
+  SDK:         Python (oneid-sdk) v1.3.2
+  Mode:        Mode 2 only (SD-JWT trust proof)
+  Header:      Hardware-Trust-Proof only
+
+What to look for:
+  - trust_tier=declared in the SD-JWT.
+  - No Hardware-Attestation header (Mode 1
+    requires a certificate chain, which
+    declared-tier identities lack).
+  - The declared tier is the lowest trust
+    level: the identity has no hardware
+    binding. It is equivalent to a standard
+    software signing key.
+  - This tier exists so that agents without
+    hardware can still participate in the
+    attestation ecosystem (e.g. to begin
+    accruing reputation), with recipients
+    aware of the reduced assurance.
+
+]]></artwork>
+        </figure>
+      </section>
+
+      <section anchor="example-email-6">
+        <name>Example 6: Sovereign-Tier TPM (Mode 1 Only, Python SDK)</name>
+        <t>
+          This message demonstrates Mode 1 only (Direct Hardware
+          Attestation) from the same physical TPM and agent identity
+          as Example 1, but using the Python SDK instead of Node.js.
+          There is no Hardware-Trust-Proof header; only the
+          Hardware-Attestation header is present.  This is the simpler
+          deployment model where no SD-JWT issuer/registry interaction
+          is needed -- the CMS signature is independently verifiable
+          against the TPM manufacturer's root CA with no trust in any
+          identity service required.  The Authentication-Results header
+          shows only hw-attest (no hw-trust result).
+        </t>
+        <figure>
+          <name>Example 6: Sovereign TPM, Mode 1 Only (Python SDK)</name>
+          <artwork type="email"><![CDATA[
+Received: from [172.22.1.89] (unknown [2001:8000:1bed:6d00:ecfa:f9e5:c8e
+        3:ed4f] (AS1221 Telstra Limited, AU))(using TLSv1.3 with cipher
+        TLS13_AES_256_GCM_SHA384) by mail.mailpal.com (Stalwart SMTP)
+        with ESMTPSA id 423ADE6B40516D1; Thu, 26 Mar 2026 06:49:08 +0000
+Return-Path: <alice@example.un.ag>
+DKIM-Signature: v=1; a=rsa-sha256; s=rsa; d=example.un.ag;
+        c=relaxed/relaxed; r=y; h=Message-ID:Date:Subject:To:From;
+        t=1774507748; x=1775371748; bh=629O0DX4KvelluIXRhMhqaQlrmx71QOQV
+        Vfnw8aAYjc=; b=UYsTBy57SwrnwyQ++nVr0toCnbv3kdk8/1o6XDPY47otdI4Ix
+        xupx4VaATFeIv+h+CorYOGAwB2WnDDZzUYYupCidt0aoJHfz238KhoEWs1L+fXhr
+        tDZYrk3e4MyQAWLNlAAS11u9ViVeCgaSLro80DQUQ49yaixGwj68Hc5HkXpuHS/r
+        uC1pGWa7Cjeu54s+sQklUHqPIwymhuRIdfKAcZJoMEx0GSRHb3QWLO0hISvHnUk0
+        tnveNw3HN/riJ8PEC35itJiJTbSDLzRL4rOdaXOkjsnStwoNQE0gJ+cLawJtmn8Q
+        a7LNz9gHaIKfSoPuTe/9vqClr6KXHRB8XRBjA==;
+Authentication-Results: mailpal.com; hw-attest=pass header.typ=TPM
+        header.alg=RS256 header.tier=sovereign
+        header.aid=urn:aid:com.1id:1id-tkoie2ve
+From: Alice <alice@example.un.ag>
+To: bob@example.un.ag
+Subject: RFC Example 6/6: Sovereign TPM (Python, Mode 1)
+Date: Thu, 26 Mar 2026 16:49:05 +1000
+Message-ID: <177450774520.30168.11382866965426144830@mailpal.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+Hardware-Attestation: v=1; typ=TPM; alg=RS256; h=from:to:subject:date:me
+        ssage-id:content-transfer-encoding:content-type:mime-version;
+        bh=uQAodZKMniNXQzM-9eg-efen0Sg2a7iaZwO10AhYOEM; ts=1774507745;
+        chain=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
+        jwbTSSBm9b2eU=; aid=urn:aid:com.1id:1id-tkoie2ve
+
+RFC example 6 of 6: hardware email attestation per
+draft-drake-email-hardware-attestation-00.
+
+  Trust tier:  sovereign (hardware TPM, typ=TPM)
+  Identity:    urn:aid:com.1id:1id-tkoie2ve
+  Device:      Intel firmware TPM (PTT)
+  SDK:         Python (oneid-sdk) v1.3.2
+  Mode:        Mode 1 only (direct attestation)
+  Header:      Hardware-Attestation only
+
+What to look for:
+  - Only Hardware-Attestation is present;
+    no Hardware-Trust-Proof header.
+  - Same identity and device as example 1,
+    but sent via the Python SDK.
+  - Demonstrates that Mode 1 and Mode 2
+    are independent and composable.
+  - The aid URN matches example 1.
+
+]]></artwork>
+        </figure>
+      </section>
+
+      <section anchor="example-verification-failures">
+        <name>Verification Failure Examples</name>
+        <t>
+          The following Authentication-Results headers illustrate what
+          receiving mail servers emit when verification fails.  These
+          are from actual test messages where the attestation was
+          malformed or tampered with.  Implementers building verifiers
+          should emit similar diagnostic information in the
+          parenthetical comment.
+        </t>
+        <t>
+          Mode 2 (SD-JWT Trust Proof) failure -- message-binding nonce
+          mismatch, indicating the SD-JWT was not bound to this
+          specific message (possible replay or header modification):
+        </t>
+        <artwork><![CDATA[
+Authentication-Results: mailpal.com; hw-trust=fail
+  header.trust_tier=declared header.registry=1id.com
+  (Message-binding nonce mismatch: got
+  'uVgDzsXUJUPch1I-hRM3vGgip4uIvrkE1aeixhsp3OU', expected
+  'lB_mxWwfU9o301aGO4Yb3GdTzKm)
+]]></artwork>
+        <t>
+          Mode 1 (Direct Hardware Attestation) failure --
+          cryptographic signature does not match, indicating the
+          message body or signed headers were modified after signing
+          (or the signing key does not match the certificate chain):
+        </t>
+        <artwork><![CDATA[
+Authentication-Results: mailpal.com; hw-attest=fail
+  header.typ=TPM header.alg=RS256 header.tier=sovereign
+  header.aid=urn:aid:com.1id:1id-tkoie2ve
+  (Signature verification failed: Cryptographic signature
+  does not match)
+]]></artwork>
+      </section>
     </section>
 
     <!-- ====================================================== -->
@@ -2999,7 +4155,7 @@ Authentication-Results: mx.example.com;
 
         <dt>Registrant</dt>
         <dd>
-          <t>Crypt Inc. (Delaware C-Corp, operational since 2006)</t>
+          <t>1id.com (Australian Pty Ltd company, operational since 2006)</t>
           <t>Contact: Christopher Drake &lt;cnd@1id.com&gt;</t>
           <t>URI: https://1id.com</t>
           <t>The registrant is committed to long-term stewardship of

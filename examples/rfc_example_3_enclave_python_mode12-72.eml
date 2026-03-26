@@ -1,0 +1,123 @@
+Received: from mac-mini.local (unknown [2001:8000:1bed:6d00:450f:3a6d:4e
+        35:1278] (AS1221 Telstra Limited, AU)) (using TLSv1.3 with
+        cipher TLS13_AES_256_GCM_SHA384) by mail.mailpal.com (Stalwart
+        SMTP) with ESMTPSA id 423D31DF50596D1;Thu, 26 Mar 2026 12:14:20
+        +0000
+Return-Path: <alice@example.un.ag>
+DKIM-Signature: v=1; a=rsa-sha256; s=rsa; d=example.un.ag;
+        c=relaxed/relaxed; r=y; h=Message-ID:Date:Subject:To:From;
+        t=1774527260; x=1775391260;
+        bh=feAv3I/4jG+E7MfQ0QJxgCWsB9rHO4ir7LMH7xA1+2s=;
+        b=H1h/DqUDa05dK7egaOvsnoxX5JQsjTL6hzhFSDBFe6SsouUWSOCSHclvNSOJCq
+        SNrLh1yOnR/Cu7KfVatydr/wF3vRfAWPZok9ek3ZT0umuMD6C4taM5l57CHQAPlo
+        7j6lJ47NAQb+LVCF+H+37Tl8WNWvUUlSOW2xc1ZHxT+6rFx+yWGgdj6oY3zNT6S5
+        h1HmQL3Brn0sOCQdM2Scjm7KEZxz8OJr53a9mPj+/Yv/A4JP67qa13dq5JLHDz+d
+        FGIQniUo77yAY5jpgg4CrBx1b16OhzT+0hahlPJtVOWovJYS/DL0DLHXRgbcCa6U
+        5CTMnmxfp6+DzzJ2sMhzwKhg==;
+Authentication-Results: mailpal.com; hw-attest=pass header.typ=ENC
+        header.alg=ES256 header.tier=enclave
+        header.aid=urn:aid:com.1id:1id-xiz43mxz
+Authentication-Results: mailpal.com; hw-trust=pass
+        header.trust_tier=enclave header.registry=1id.com
+From: Alice <alice@example.un.ag>
+To: bob@example.un.ag
+Subject: RFC Example 3/6: Enclave (Python, Mode 1+2)
+Date: Thu, 26 Mar 2026 22:14:10 +1000
+Message-ID: <177452725007.16358.11744115580712301841@mailpal.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+Hardware-Trust-Proof: eyJhbGciOiJFUzI1NiIsImtpZCI6IjFpZC1od2F0dGVzdC1lcz
+        I1Ni0xIiwidHlwIjoic2Qrand0In0.eyJpc3MiOiJodHRwczovLzFpZC5jb20iLC
+        JpYXQiOjE3NzQ1MjcyNTUsImV4cCI6MTc3NDUyNzU1NSwibm9uY2UiOiIxRFA3TV
+        czYVN0WTdzRzltbDdlUVJJXzh4WU9xNVplWDJZOUw1dWxLQ3BrIiwiX3NkX2FsZy
+        I6InNoYS0yNTYiLCJfc2QiOlsiM1J6WWl4bmVjNHFPdGdYSjU1ZTRTS2FtVWtWSG
+        RGUGZYUkNLMEx0U2dxdyJdfQ.svOUXSI3K4qpFhkIshqqcJ-EJ3erFZWO4S_jhuX
+        GFtrmiNmkx_F9czvoNYIeTPDi7mbXcMDjyOg3niHabToNEg~WyJ3eTRuZ1Yxb1A5
+        bWhpQmlZTUdEYUlBIiwidHJ1c3RfdGllciIsImVuY2xhdmUiXQ~
+X-1ID-Contact-Token: 69aea95a
+Hardware-Attestation: v=1; typ=ENC; alg=ES256;
+        h=from:to:subject:date:message-id:content-transfer-encoding:cont
+        ent-type:mime-version:from:to:subject:date:message-id:content-tr
+        ansfer-encoding:content-type:mime-version;
+        bh=NoBLb0ghkIoYnL6DZMKhTd4PGygEyah4fcuBEbXYnrw; ts=1774527256;
+        chain=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;
+        aid=urn:aid:com.1id:1id-xiz43mxz
+
+RFC example 3 of 6: hardware email attestation per
+draft-drake-email-hardware-attestation-00.
+
+  Trust tier:  enclave (Apple Secure Enclave)
+  Identity:    urn:aid:com.1id:1id-xiz43mxz
+  Device:      Apple Mac mini (M2, SE P256)
+  SDK:         Python (oneid-sdk) v1.3.4
+  Mode:        Combined (Mode 1 + Mode 2)
+  Headers:     Hardware-Attestation (Mode 1)
+               Hardware-Trust-Proof (Mode 2)
+
+What to look for:
+  - trust_tier=enclave in the SD-JWT.
+  - The enclave tier shares a compatibility
+    group with virtual (vTPM): both provide
+    key isolation but lack anti-Sybil
+    guarantees (re-keyable at will).
+  - Hardware-Attestation carries a CMS
+    SignedData bundle with the SE-backed
+    ECDSA P-256 key and certificate chain.
+  - A different identity than examples 1/6
+    (this device has its own enrollment).

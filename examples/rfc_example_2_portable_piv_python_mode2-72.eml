@@ -1,0 +1,61 @@
+Received: from moonmac.home (unknown [2001:8000:1bed:6d00:d1b:716c:55b1:
+        1044] (AS1221 Telstra Limited, AU))(using TLSv1.2 with cipher
+        TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384) by mail.mailpal.com
+        (Stalwart SMTP) with ESMTPSA id 423B3B18EE530D1; Thu, 26 Mar
+        2026 07:39:45 +0000
+Return-Path: <alice@example.un.ag>
+DKIM-Signature: v=1; a=rsa-sha256; s=rsa; d=example.un.ag;
+        c=relaxed/relaxed; r=y; h=Message-ID:Date:Subject:To:From;
+        t=1774510785; x=1775374785; bh=JzFuOSIpa6v/f7VY5FQ2+pcMkBmkx7MBh
+        bMjnGbhwmI=; b=zUgy4VRUk2VvQm2ZbXx+cgMJrjKQ8w8p0JfwrzFFrQZOzZviP
+        kT3TTv2gVTYRedADt3Oz/3pBUhcU4/hm1SsNO1gEPeedp1zll8UFDkM4gmBfEyCd
+        syvbv/TFVd4tp6aFcnsrY+/vR1yQ6Qnpbl96YLSiXqLtcR5BKf4egRmn+kjcMaiS
+        YVhXAvfIgLqauecNPiuQVMNW+bTs/sYp5fVOP122gw4AdgBlsL335xnzU+WV7xkl
+        ANTNPXYX7jbQ0Eb1g4ml/2cWzi7Hvp/AnuA1fzi7FCXlBHTnKuFBxCKfrvjUVkad
+        4mK/+RPprb4/9LCO8UI4cFMdVi+bDQQCaZnyQ==;
+Authentication-Results: mailpal.com; hw-trust=pass
+        header.trust_tier=portable header.registry=1id.com
+From: Alice <alice@example.un.ag>
+To: bob@example.un.ag
+Subject: RFC Example 2/6: Portable PIV (Python, Mode 2)
+Date: Thu, 26 Mar 2026 17:39:37 +1000
+Message-ID: <177451077748.22538.12383034578129922803@mailpal.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+Hardware-Trust-Proof: eyJhbGciOiJFUzI1NiIsImtpZCI6IjFpZC1od2F0dGVzdC1lcz
+        I1Ni0xIiwidHlwIjoic2Qrand0In0.eyJpc3MiOiJodHRwczovLzFpZC5jb20iLC
+        JpYXQiOjE3NzQ1MTA3ODAsImV4cCI6MTc3NDUxMTA4MCwibm9uY2UiOiJxTUlQQk
+        FrOWFYU2ljTmZpTnRlVlpzcHVoRV9HX1U5a3FXRndPWDBnTFFJIiwiX3NkX2FsZy
+        I6InNoYS0yNTYiLCJfc2QiOlsiang2ZnNmemtWTXYzVDZENmk1ZTYyd0xuN09xan
+        M5NkF0V0IwR0tPcXlmRSJdfQ.F3s1ojJtpOeDNTWNLVriHdEOoUlb9HTl-hBCpp6
+        pDms6GPRUjxcUXlibBXrjuSsfaEyEWA17d-rToZzz-ECcCg~WyJ2U2RVMzQ0SFNU
+        R1AtT0Vwb0VpdE53IiwidHJ1c3RfdGllciIsInBvcnRhYmxlIl0~
+X-1ID-Contact-Token: 8d0f52ce
+
+RFC example 2 of 6: hardware email attestation per
+draft-drake-email-hardware-attestation-00.
+
+  Trust tier:  portable (PIV/YubiKey, typ=PIV)
+  Identity:    urn:aid:com.1id:1id-tkoie2ve
+  Device:      YubiKey 5 NFC (PIV slot 9a)
+  SDK:         Python (oneid-sdk) v1.3.3
+  Mode:        Mode 2 only (SD-JWT trust proof)
+  Header:      Hardware-Trust-Proof only
+
+What to look for:
+  - Same identity (aid) as examples 1 and 6,
+    but a different trust_tier (portable).
+  - This identity is deliberately shared across
+    two machines (RoG via TPM, moonmac via PIV).
+    A multi-server bulk-mail operation may want
+    a single identity across all its servers so
+    that they accrue a common reputation.
+  - Dynamic trust tiering: the tier reflects
+    the device used now, not the highest tier
+    the identity has ever used.
+  - Only Hardware-Trust-Proof is present;
+    Mode 1 direct attestation is not yet
+    supported for PIV-based signing.
+  - The From address (alice@example.un.ag)
+    differs from the aid URN.

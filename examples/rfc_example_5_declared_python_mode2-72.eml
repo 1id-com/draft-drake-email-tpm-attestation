@@ -1,0 +1,60 @@
+Received: from RoG.localdomain (unknown [2001:8000:1bed:6d00:ecfa:f9e5:c
+        8e3:ed4f] (AS1221 Telstra Limited, AU))(using TLSv1.3 with
+        cipher TLS13_AES_256_GCM_SHA384) by mail.mailpal.com (Stalwart
+        SMTP) with ESMTPSA id 423ADB058650CD1; Thu, 26 Mar 2026 06:47:16
+        +0000
+Return-Path: <alice@example.un.ag>
+DKIM-Signature: v=1; a=rsa-sha256; s=rsa; d=example.un.ag;
+        c=relaxed/relaxed; r=y; h=Message-ID:Date:Subject:To:From;
+        t=1774507636; x=1775371636;
+        bh=tQbweOdhmIKnVJeZ2WfV+dXtsk7S4L1RTzicUBPYEuk=; b=6yNSGTOK1IodR
+        J59Jbhd9F/mFwrvJeGPv1C3sKb4eZKbPmYBQtdDjWuo4VknvsiZOE3uowJV6HitJ
+        xCwd3ORAby9tMH4CX+U8aaPrcu24pGxRGP3qHKuJcj3LtnktSj3/RBwipjX7roqu
+        gwZwEwJMBN8I6ilXN7GiC9F03AOfuraBSAUw+4CMk6oHl6tK2jeEXKu0VAHg0tOT
+        qX05HOl4VTEy6meCKlXDRvJJO+iakUBa0udVtHMthHQYkBsGnNoBllUgXSpgXdxg
+        nuAx1oVMpuZUdjBJZdtC5xpeZsupW4myKjfEP4lUuh00o5j4MbCZqUWAr0xriMpz
+        2rD7EWaAw==;
+Authentication-Results: mailpal.com; hw-trust=pass
+        header.trust_tier=declared header.registry=1id.com
+From: Alice <alice@example.un.ag>
+To: bob@example.un.ag
+Subject: RFC Example 5/6: Declared tier (Python, Mode 2)
+Date: Thu, 26 Mar 2026 16:47:11 +1000
+Message-ID: <177450763154.21623.9499316015451560959@mailpal.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+Hardware-Trust-Proof: eyJhbGciOiJFUzI1NiIsImtpZCI6IjFpZC1od2F0dGVzdC1lcz
+        I1Ni0xIiwidHlwIjoic2Qrand0In0.eyJpc3MiOiJodHRwczovLzFpZC5jb20iLC
+        JpYXQiOjE3NzQ1MDc2MzIsImV4cCI6MTc3NDUwNzkzMiwibm9uY2UiOiIxV040Q1
+        RsRERubUVkdDM2NXFSZXl6dk1mX21VMVFjak82Y1dGMVRfNDg4IiwiX3NkX2FsZy
+        I6InNoYS0yNTYiLCJfc2QiOlsieGt6MXhiTnhJbmZMWXdObzZ6dWNtTjVhbVB0VH
+        FCaDFWOE4xYVQ4cy1BOCJdfQ.DxUzkzn3Bh33Nt-Tpq7YLkKYkYutLJyNgj3jJYG
+        KuKNv-MoMuFXpnhlpVnG5qasrIb_TRJDmAGifvnOBzV5ubA~WyI4VGUwNHd4cHpL
+        YU9POURQaVhfZXBnIiwidHJ1c3RfdGllciIsImRlY2xhcmVkIl0~
+X-1ID-Contact-Token: c9f0a68c
+
+RFC example 5 of 6: hardware email attestation per
+draft-drake-email-hardware-attestation-00.
+
+  Trust tier:  declared (software key, typ=SFT)
+  Identity:    urn:aid:com.1id:1id-zrw4psyg
+  Device:      Software-only (Ed25519 key)
+  SDK:         Python (oneid-sdk) v1.3.2
+  Mode:        Mode 2 only (SD-JWT trust proof)
+  Header:      Hardware-Trust-Proof only
+
+What to look for:
+  - trust_tier=declared in the SD-JWT.
+  - No Hardware-Attestation header (Mode 1
+    requires a certificate chain, which
+    declared-tier identities lack).
+  - The declared tier is the lowest trust
+    level: the identity has no hardware
+    binding. It is equivalent to a standard
+    software signing key.
+  - This tier exists so that agents without
+    hardware can still participate in the
+    attestation ecosystem (e.g. to begin
+    accruing reputation), with recipients
+    aware of the reduced assurance.

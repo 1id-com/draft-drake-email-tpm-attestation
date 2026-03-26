@@ -1,0 +1,112 @@
+Received: from [172.22.1.89] (unknown [2001:8000:1bed:6d00:ecfa:f9e5:c8e
+        3:ed4f] (AS1221 Telstra Limited, AU))(using TLSv1.3 with cipher
+        TLS13_AES_256_GCM_SHA384) by mail.mailpal.com (Stalwart SMTP)
+        with ESMTPSA id 423ADE6B40516D1; Thu, 26 Mar 2026 06:49:08 +0000
+Return-Path: <alice@example.un.ag>
+DKIM-Signature: v=1; a=rsa-sha256; s=rsa; d=example.un.ag;
+        c=relaxed/relaxed; r=y; h=Message-ID:Date:Subject:To:From;
+        t=1774507748; x=1775371748; bh=629O0DX4KvelluIXRhMhqaQlrmx71QOQV
+        Vfnw8aAYjc=; b=UYsTBy57SwrnwyQ++nVr0toCnbv3kdk8/1o6XDPY47otdI4Ix
+        xupx4VaATFeIv+h+CorYOGAwB2WnDDZzUYYupCidt0aoJHfz238KhoEWs1L+fXhr
+        tDZYrk3e4MyQAWLNlAAS11u9ViVeCgaSLro80DQUQ49yaixGwj68Hc5HkXpuHS/r
+        uC1pGWa7Cjeu54s+sQklUHqPIwymhuRIdfKAcZJoMEx0GSRHb3QWLO0hISvHnUk0
+        tnveNw3HN/riJ8PEC35itJiJTbSDLzRL4rOdaXOkjsnStwoNQE0gJ+cLawJtmn8Q
+        a7LNz9gHaIKfSoPuTe/9vqClr6KXHRB8XRBjA==;
+Authentication-Results: mailpal.com; hw-attest=pass header.typ=TPM
+        header.alg=RS256 header.tier=sovereign
+        header.aid=urn:aid:com.1id:1id-tkoie2ve
+From: Alice <alice@example.un.ag>
+To: bob@example.un.ag
+Subject: RFC Example 6/6: Sovereign TPM (Python, Mode 1)
+Date: Thu, 26 Mar 2026 16:49:05 +1000
+Message-ID: <177450774520.30168.11382866965426144830@mailpal.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+Hardware-Attestation: v=1; typ=TPM; alg=RS256; h=from:to:subject:date:me
+        ssage-id:content-transfer-encoding:content-type:mime-version;
+        bh=uQAodZKMniNXQzM-9eg-efen0Sg2a7iaZwO10AhYOEM; ts=1774507745;
+        chain=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
+        jwbTSSBm9b2eU=; aid=urn:aid:com.1id:1id-tkoie2ve
+
+RFC example 6 of 6: hardware email attestation per
+draft-drake-email-hardware-attestation-00.
+
+  Trust tier:  sovereign (hardware TPM, typ=TPM)
+  Identity:    urn:aid:com.1id:1id-tkoie2ve
+  Device:      Intel firmware TPM (PTT)
+  SDK:         Python (oneid-sdk) v1.3.2
+  Mode:        Mode 1 only (direct attestation)
+  Header:      Hardware-Attestation only
+
+What to look for:
+  - Only Hardware-Attestation is present;
+    no Hardware-Trust-Proof header.
+  - Same identity and device as example 1,
+    but sent via the Python SDK.
+  - Demonstrates that Mode 1 and Mode 2
+    are independent and composable.
+  - The aid URN matches example 1.
