@@ -1,0 +1,128 @@
+Received: from oneid-sdk (unknown [2001:8000:1bed:6d00:ecfa:f9e5:c8e3:ed
+        4f] (AS1221 Telstra Limited, AU))(using TLSv1.3 with cipher
+        TLS13_AES_256_GCM_SHA384) by mail.mailpal.com (Stalwart SMTP)
+        with ESMTPSA id 423AB698D84E8D1; Thu, 26 Mar 2026 06:27:23 +0000
+Return-Path: <alice@example.un.ag>
+DKIM-Signature: v=1; a=rsa-sha256; s=rsa; d=example.un.ag;
+        c=relaxed/relaxed; r=y; h=Message-ID:Date:Subject:To:From;
+        t=1774506443; x=1775370443; bh=+GNsqybwllZv8Ax0BtgYSg73F/3TnNOd8
+        lZ5Dlr7wJM=; b=bibpmNagEyVBbOaFHy6+roU+kMTxheiMcNrQfEhQq4EHMf1zE
+        E0zt/EwIohwEkm55Ajra4k834hqnvbxmT0/fzD+f/Uq5SP6dUp2m1KBSMrkYHVTD
+        LW0m7TqsCzKoFOJRQrP8HkXTGGlLZs8VOHwN+UFLBOrR0TebCSRZQldAMcUKfx3w
+        +/uopSKYF6BKvq1U1NDXDxIyrIiYJ9ma64VjMz/GIu8Aqg9CKg3DtiEIhKa4B+9m
+        Q4olARarM4B0n5HPKcib6UU/I8XXRnvynBFKIRc+MlVIXWsQYKbbQTBqMJRVy8fR
+        sdXANCTDhzV3UoO+EXUE4yXeba7xCWfdk6SQQ==;
+Authentication-Results: mailpal.com; hw-attest=pass header.typ=TPM
+        header.alg=RS256 header.tier=sovereign
+        header.aid=urn:aid:com.1id:1id-tkoie2ve
+Authentication-Results: mailpal.com; hw-trust=pass
+        header.trust_tier=sovereign header.registry=1id.com
+From: Alice <alice@example.un.ag>
+To: bob@example.un.ag
+Subject: RFC Example 1/6: Sovereign TPM (Node.js, Mode 1+2)
+Date: Thu, 26 Mar 2026 16:27:16 +1000
+Message-ID: <1774506436645.8ed455cf30df4796@mailpal.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+Hardware-Attestation: v=1; typ=TPM; alg=RS256; h=from:to:subject:date:me
+        ssage-id:content-transfer-encoding:content-type:mime-version:fro
+        m:to:subject:date:message-id:content-transfer-encoding:content-t
+        ype:mime-version; bh=D86x9X_Sdbjuiw4qHtNHgn_D9ddyl18jiIMSUqhmnDY
+        ; ts=1774506440; chain=MIIMAQYJKoZIhvcNAQcCoIIL8jCCC+4CAQExDzANB
+        glghkgBZQMEAgEFADALBgkqhkiG9w0BBwGgggpWMIID4TCCAsmgAwIBAgIUH01pf
+        nWQCIfMiHfTNQb7v7r3CmMwDQYJKoZIhvcNAQELBQAwLjEMMAoGA1UECgwDMUlEM
+        R4wHAYDVQQDDBUxSUQgSW50ZXJtZWRpYXRlIENBIEEwHhcNMjYwMzIwMTYzNjI2W
+        hcNMjcwMzIwMTYzNjI2WjBMMQwwCgYDVQQKDAMxSUQxJTAjBgNVBAMMHHVybjpha
+        WQ6Y29tLjFpZDoxaWQtdGtvaWUydmUxFTATBgNVBAUTDDFpZC10a29pZTJ2ZTCCA
+        SIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBANvysXC8ILSnhGcqg66dWKWQL
+        p9pOJZmj6yTbICDVLydBwc1LGEQAW3BCee6XU/Bs0n91uROJCQw3jgrCMiBUOvS6
+        Mjox/8NT1gfZ9sDQGVXN5gQ0t9H+r9vEPJ7YL9jhYmlxWQp+fS6vhZNrmH7g4XwE
+        K+EsbMsc8H0ZuxKAM1S7p9447G9IOZOkFMK33ZxCCY00DFmwzXu/dkGFfuOaSWM5
+        cazWz/kxqOtcpT73ACmJxQ6LU3yzB6VwbfwCWm6klQNKsd1c7FT5hX5ZYtEqDXeI
+        pIGWyQp9TQgNbUIPeJCWO2rDLmh0ZXwqXR4yBqKeNWhUjrcnfQgNfrjJ7zB0z8CA
+        wEAAaOB2DCB1TAnBgNVHREEIDAehhx1cm46YWlkOmNvbS4xaWQ6MWlkLXRrb2llM
+        nZlMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBRroL9zk
+        1MDMjMG4UyIvjZdzdX8QTAfBgNVHSMEGDAWgBRnIsB54FVyNiezRKLzTN+AXd+Wr
+        jAXBgorBgEEAYPUXwEBBAlzb3ZlcmVpZ24wIgYKKwYBBAGD1F8BAgQUMjAyNi0wM
+        y0wNFQwMDowMDowMFowDwYKKwYBBAGD1F8BAwQBADANBgkqhkiG9w0BAQsFAAOCA
+        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
+        33OqpMiDIFfeI0pgKVYzvoVmWi+Tyc=; aid=urn:aid:com.1id:1id-tkoie2v
+        e
+Hardware-Trust-Proof: eyJhbGciOiJFUzI1NiIsImtpZCI6IjFpZC1od2F0dGVzdC1lcz
+        I1Ni0xIiwidHlwIjoic2Qrand0In0.eyJpc3MiOiJodHRwczovLzFpZC5jb20iLC
+        JpYXQiOjE3NzQ1MDY0MzksImV4cCI6MTc3NDUwNjczOSwibm9uY2UiOiJVRnh4bF
+        hwUTR6dGg3ejlZSlRkWFRONTlKbWw0RFVheXVockdiUFotWHhNIiwiX3NkX2FsZy
+        I6InNoYS0yNTYiLCJfc2QiOlsidGdCX3B5RFpuLVQtRGFlQlpONXFyNk5PTldZZG
+        00Y3hOWUx1ZDBPT0ZDUSJdfQ.1Ojz34CEn-8nzpGGQf0R321yM1OMsguAkvc3lyq
+        GagSWltkPKC6xb_MfETNilB-WQeHGffZQknrhwy-9mamFAA~WyJqN1AtQUFvc0RY
+        dHpld0hvOTlGcE9RIiwidHJ1c3RfdGllciIsInNvdmVyZWlnbiJd~
+
+RFC example 1 of 6: hardware email attestation per
+draft-drake-email-hardware-attestation-00.
+
+  Trust tier:  sovereign (hardware TPM, typ=TPM)
+  Identity:    urn:aid:com.1id:1id-tkoie2ve
+  Device:      Intel firmware TPM (PTT)
+  SDK:         Node.js (1id npm package) v1.3.1
+  Mode:        Combined (Mode 1 + Mode 2)
+  Headers:     Hardware-Attestation (Mode 1)
+               Hardware-Trust-Proof (Mode 2)
+
+What to look for:
+  - Hardware-Attestation: CMS SignedData bundle
+    with X.509 chain rooted at manufacturer CA.
+  - Hardware-Trust-Proof: SD-JWT with selectively
+    disclosed trust_tier claim.
+  - Both headers share the same aid URN.
+  - From (alice@example.un.ag) differs from the
+    aid URN -- sender and hardware identity are
+    decoupled by design.
+  - Compare with example 6 (same identity/device,
+    Mode 1 only, Python SDK).
