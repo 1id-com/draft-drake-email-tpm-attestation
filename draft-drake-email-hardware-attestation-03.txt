@@ -1,0 +1,3976 @@
+
+
+
+
+Network Working Group                                         C.N. Drake
+Internet-Draft                                                   1id.com
+Intended status: Experimental                               17 July 2026
+Expires: 18 January 2027
+
+
+           Hardware Attestation for Email Sender Verification
+               draft-drake-email-hardware-attestation-03
+
+Abstract
+
+   This document defines a mechanism for automated email senders (AI
+   agents, bots, and autonomous systems) to include hardware attestation
+   evidence in message headers, enabling receiving mail servers to
+   cryptographically verify that the sending system has access to a
+   genuine hardware security component -- such as a Trusted Platform
+   Module (TPM), a PIV smart card (e.g., YubiKey), a virtual TPM, or a
+   software-managed key -- from a known manufacturer or issuer.  The
+   attestation proves hardware presence, not message composition locale.
+   The verification chain runs from the email header to a manufacturer's
+   root Certificate Authority (for hardware-backed attestation) or to an
+   issuer's verification key (for issuer-certified attestation).
+
+   Each automated sender is assigned a persistent agent identity,
+   expressed as a URN in the "aid" (Agent Identity) namespace
+   ([RFC8141]), enabling federated issuance by multiple independent
+   identity providers and persistent reputation tracking across
+   protocols and platforms.
+
+   As a companion mechanism, this document defines a privacy-preserving
+   alternative using SD-JWT (Selective Disclosure JWT, [RFC9901]) where
+   the sender can prove specific claims about their hardware trust level
+   without revealing their hardware identity.
+
+   Together, these mechanisms provide both Sybil-resistant
+   authentication and a foundation for reputation building: at the
+   hardware-anchored trust tiers, each identity requires a unique
+   hardware security component, so large-scale identity manufacture
+   costs physical devices rather than compute, while the persistent
+   identity enables receiving systems to accumulate trust signals over
+   time.  Software-only agents MAY participate at a clearly-labeled
+   lower trust tier.  The identity layer itself -- the "aid" URN, its
+   registry, trust tiers, and lifecycle -- is defined in
+   [I-D.drake-agent-identity-registry]; this document defines the
+   transport binding and its verification.
+
+
+
+
+
+
+Drake                    Expires 18 January 2027                [Page 1]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   While this document specifies these mechanisms for email message
+   headers, the attestation formats defined herein -- both the CMS
+   attestation bundle and the SD-JWT trust proof -- are self-contained,
+   transport-independent data structures applicable to HTTP headers,
+   agent-to-agent messaging, payment authorization, and other Internet
+   protocols.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on 18 January 2027.
+
+Copyright Notice
+
+   Copyright (c) 2026 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+   Please review these documents carefully, as they describe your rights
+   and restrictions with respect to this document.
+
+Table of Contents
+
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   4
+     1.1.  Design Principles . . . . . . . . . . . . . . . . . . . .   6
+     1.2.  Requirements Language . . . . . . . . . . . . . . . . . .   7
+     1.3.  Terminology . . . . . . . . . . . . . . . . . . . . . . .   7
+   2.  Problem Statement . . . . . . . . . . . . . . . . . . . . . .   9
+   3.  Applicability . . . . . . . . . . . . . . . . . . . . . . . .   9
+   4.  Architecture  . . . . . . . . . . . . . . . . . . . . . . . .  10
+     4.1.  Agent Identity Format . . . . . . . . . . . . . . . . . .  10
+     4.2.  Identity-to-Hardware Cardinality  . . . . . . . . . . . .  11
+     4.3.  Hardware Attestation Mechanisms . . . . . . . . . . . . .  11
+     4.4.  Transient Key Model . . . . . . . . . . . . . . . . . . .  13
+
+
+
+Drake                    Expires 18 January 2027                [Page 2]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+     4.5.  Issuer Discovery  . . . . . . . . . . . . . . . . . . . .  15
+       4.5.1.  DNS-Published Issuer Key  . . . . . . . . . . . . . .  15
+       4.5.2.  HTTPS-Based Discovery (Fallback)  . . . . . . . . . .  17
+   5.  Mode 1: Direct Hardware Attestation . . . . . . . . . . . . .  17
+     5.1.  Attestation Evidence Structure  . . . . . . . . . . . . .  18
+     5.2.  Header Field Definition . . . . . . . . . . . . . . . . .  19
+     5.3.  Verification Algorithm  . . . . . . . . . . . . . . . . .  22
+     5.4.  Authentication-Results Integration  . . . . . . . . . . .  24
+     5.5.  Privacy Considerations for Direct Attestation . . . . . .  25
+   6.  Mode 2: SD-JWT Trust Proof  . . . . . . . . . . . . . . . . .  26
+     6.1.  Overview  . . . . . . . . . . . . . . . . . . . . . . . .  26
+     6.2.  Header Field Definition . . . . . . . . . . . . . . . . .  27
+     6.3.  Message Binding via Issuer-Signed Nonce . . . . . . . . .  29
+     6.4.  Verification Algorithm  . . . . . . . . . . . . . . . . .  30
+     6.5.  Authentication-Results Integration  . . . . . . . . . . .  31
+   7.  Combined Mode . . . . . . . . . . . . . . . . . . . . . . . .  31
+   8.  Sybil Resistance Properties . . . . . . . . . . . . . . . . .  32
+     8.1.  Direct Hardware Attestation (Mode 1)  . . . . . . . . . .  32
+     8.2.  SD-JWT Trust Proof (Mode 2) . . . . . . . . . . . . . . .  33
+     8.3.  Virtual Hardware  . . . . . . . . . . . . . . . . . . . .  33
+   9.  Interaction with Existing Email Authentication  . . . . . . .  34
+     9.1.  Multiple Headers and Forwarding . . . . . . . . . . . . .  35
+     9.2.  Handle Display in Email . . . . . . . . . . . . . . . . .  35
+   10. Message Submission Requirements . . . . . . . . . . . . . . .  36
+     10.1.  Agent Identity Binding at Submission . . . . . . . . . .  36
+     10.2.  Hardware Fingerprint Binding at Submission . . . . . . .  37
+     10.3.  Messages Without Attestation . . . . . . . . . . . . . .  37
+     10.4.  Duplicate Header Rejection . . . . . . . . . . . . . . .  38
+     10.5.  Timestamp Validation at Submission . . . . . . . . . . .  38
+   11. Interoperability Considerations . . . . . . . . . . . . . . .  38
+     11.1.  Backward Compatibility . . . . . . . . . . . . . . . . .  38
+     11.2.  DKIM Coverage of Attestation Headers . . . . . . . . . .  38
+     11.3.  Header Size Considerations . . . . . . . . . . . . . . .  39
+   12. Implementation Status . . . . . . . . . . . . . . . . . . . .  39
+     12.1.  1id.com Issuer . . . . . . . . . . . . . . . . . . . . .  39
+     12.2.  MailPal.com Verifier and Relay . . . . . . . . . . . . .  40
+   13. IANA Considerations . . . . . . . . . . . . . . . . . . . . .  41
+     13.1.  Header Field Registration  . . . . . . . . . . . . . . .  41
+     13.2.  Authentication Method Registration . . . . . . . . . . .  41
+     13.3.  Hardware Attestation Type Registry . . . . . . . . . . .  43
+     13.4.  Underscored DNS Node Name Registration . . . . . . . . .  43
+     13.5.  URN Namespace Registration . . . . . . . . . . . . . . .  43
+   14. Security Considerations . . . . . . . . . . . . . . . . . . .  43
+     14.1.  Manufacturer CA Compromise . . . . . . . . . . . . . . .  44
+     14.2.  Revocation and Compromise Response . . . . . . . . . . .  44
+     14.3.  Replay Attacks . . . . . . . . . . . . . . . . . . . . .  45
+     14.4.  Compromised Endpoints  . . . . . . . . . . . . . . . . .  45
+     14.5.  Physical Attacks on Hardware Security Components . . . .  46
+
+
+
+Drake                    Expires 18 January 2027                [Page 3]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+     14.6.  Virtual Hardware Risk  . . . . . . . . . . . . . . . . .  46
+     14.7.  Software-Only Attestation Risk . . . . . . . . . . . . .  46
+     14.8.  Transient Object Slot Limits . . . . . . . . . . . . . .  46
+     14.9.  Policy Abuse and Deanonymization Risk  . . . . . . . . .  46
+     14.10. Header Stripping and Modification  . . . . . . . . . . .  47
+     14.11. Credential Theft and Identity Substitution . . . . . . .  48
+     14.12. Issuer Trust and Accountability  . . . . . . . . . . . .  48
+     14.13. Cryptographic Agility and Post-Quantum Migration . . . .  49
+   15. Privacy Considerations  . . . . . . . . . . . . . . . . . . .  49
+     15.1.  Applicability to Human vs. Automated Senders . . . . . .  49
+     15.2.  Hardware Fingerprint Linkability . . . . . . . . . . . .  50
+     15.3.  Privacy-Preserving Alternative (Mode 2)  . . . . . . . .  50
+     15.4.  Issuer Knowledge . . . . . . . . . . . . . . . . . . . .  51
+     15.5.  Data Minimization  . . . . . . . . . . . . . . . . . . .  51
+     15.6.  Abuse-Resistant Contact Tokens . . . . . . . . . . . . .  51
+   16. Normative References  . . . . . . . . . . . . . . . . . . . .  52
+   17. Informative References  . . . . . . . . . . . . . . . . . . .  53
+   Appendix A.  Appendix: Hardware Manufacturer Root CAs . . . . . .  55
+   Appendix B.  Appendix: Live Email Examples  . . . . . . . . . . .  56
+     B.1.  Example 1: Sovereign-Tier TPM (Combined Mode) . . . . . .  57
+     B.2.  Example 2: Portable-Tier PIV/YubiKey (Combined Mode)  . .  60
+     B.3.  Example 3: Enclave-Tier Apple Secure Enclave (Combined
+           Mode) . . . . . . . . . . . . . . . . . . . . . . . . . .  62
+     B.4.  Example 4: Virtual-Tier vTPM (Combined Mode)  . . . . . .  64
+     B.5.  Example 5: Declared-Tier Software Key (Combined Mode) . .  67
+     B.6.  Verification Failure Examples . . . . . . . . . . . . . .  69
+   Appendix C.  Appendix: Applicability to Other Transports  . . . .  70
+   Appendix D.  Acknowledgments  . . . . . . . . . . . . . . . . . .  71
+   Author's Address  . . . . . . . . . . . . . . . . . . . . . . . .  71
+
+1.  Introduction
+
+   Email authentication today relies on three complementary mechanisms:
+   SPF [RFC7208] verifies that the transmitting mail server's IP address
+   is authorized for the domain, DKIM [RFC6376] provides a domain-level
+   cryptographic signature, and DMARC [RFC7489] ties them together with
+   policy.  These mechanisms prove that an email was authorized by a
+   domain.  They do not prove anything about the agent or device that
+   composed the message.
+
+
+
+
+
+
+
+
+
+
+
+
+Drake                    Expires 18 January 2027                [Page 4]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   This distinction has become critical.  The rapid proliferation of
+   autonomous AI agents capable of composing human-quality text has
+   rendered content-based spam detection increasingly ineffective.  An
+   attacker can register unlimited domains, configure valid SPF/DKIM/
+   DMARC, and use AI to generate messages indistinguishable from
+   legitimate correspondence.  Every existing defense -- CAPTCHAs, phone
+   verification, behavioral analysis, IP reputation -- fails when the
+   attacker is an AI that can operate at scale with near-zero marginal
+   cost.
+
+   The fundamental problem is that all existing sender identity signals
+   are software-based and therefore copyable at zero cost.  This
+   document proposes anchoring sender identity to hardware, applying the
+   remote attestation architecture of [RFC9334] to email: specifically,
+   to the tamper-resistant hardware security components present in
+   virtually every modern computing device.
+
+   A hardware security component -- whether a discrete TPM chip, a
+   firmware TPM (e.g., Intel PTT or AMD fTPM), a PIV smart card (e.g.,
+   YubiKey), or a virtual TPM provided by a hypervisor -- contains a
+   unique identity key burned in or generated at manufacturing time,
+   with a certificate chaining to the manufacturer's root CA.  This key
+   is designed to resist extraction and cloning.  By signing email
+   content with a hardware-resident key and including or linking the
+   certificate chain in the message headers, an automated sender proves
+   that the email originated on a specific, genuine piece of hardware.
+
+   Receiving mail servers can verify this proof by validating the
+   certificate chain against manufacturer root CAs (Intel, AMD, ARM,
+   Apple, etc.) which are already widely distributed for Secure Boot and
+   platform integrity.  Deployments that wish to accept hardware
+   attestation will need to maintain or subscribe to an appropriate
+   trust store of these root CAs.
+
+   This document defines two complementary mechanisms:
+
+   1.  *Direct Hardware Attestation* (Section 5): A CMS [RFC5652]
+       signed-data structure containing the attestation signature and
+       full certificate chain, carried in or linked from an email
+       header.  Verifiable against manufacturer root CAs when the chain
+       is manufacturer-rooted, or against an Issuer's CA when the Issuer
+       has verified the hardware at enrollment and issued the AK
+       certificate (the deployment model of every live example in
+       Appendix B).  Optimized for deliverability and reputation
+       tracking.
+
+
+
+
+
+
+Drake                    Expires 18 January 2027                [Page 5]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   2.  *SD-JWT Trust Proof* (Section 6): A Selective Disclosure JWT
+       [RFC9901] issued by an identity provider (issuer), where the
+       sender selects which claims to reveal.  Optimized for privacy in
+       contexts where revealing hardware identity is undesirable.
+
+1.1.  Design Principles
+
+   The following principles guide the design of this specification and
+   are referenced throughout the document:
+
+   Automated-Sender Focus  This specification targets AI agents, bots,
+      and autonomous systems.  It is not intended for individual human
+      users (see Section 3).  The privacy trade-offs are acceptable for
+      automated senders but disproportionate for human correspondence.
+
+   Transport Independence  The attestation formats defined herein -- the
+      CMS attestation bundle and the SD-JWT trust proof -- are self-
+      contained data structures that can be carried in any protocol
+      capable of transporting octet strings.  This document specifies
+      the email transport binding; Appendix C discusses applicability to
+      HTTP and other protocols.
+
+   Federated Issuance  Issuance is federated at the Registrar layer of
+      the registry architecture ([I-D.drake-agent-identity-registry]):
+      multiple independent, accredited Issuers (Registrars) compete to
+      enroll agents in a shared namespace, and an agent can move between
+      Issuers without its identity changing.  Verifiers discover an
+      Issuer's keys through DNS or HTTPS (Section 4.5).
+
+   Inclusive Trust Tiers  Agents with genuine hardware security
+      components receive the highest trust, but agents with virtual
+      hardware or software-only keys can still participate at lower
+      trust tiers, building reputation over time.  This inclusivity
+      avoids an all-or-nothing barrier to adoption.
+
+   Reputation as the Goal  Sybil resistance is a means, not an end.  The
+      persistent, hardware-anchored identities defined here exist to
+      enable receiving systems to build and query reputation over time,
+      rewarding good behavior and flagging bad.
+
+   Dual Trust Anchors  Both attestation modes deliberately provide the
+      agent identity (aid) and the hardware certificate or fingerprint
+      together.  Verifiers MAY choose which anchor to use as their basis
+      for trust decisions: the identity is the primary key for
+      reputation tracking and persists across hardware migrations, while
+      the hardware fingerprint is IdP-independent and verifiable offline
+      against manufacturer root CAs.  Some verifiers will prefer the
+      identity (for accumulated reputation), others will prefer the
+
+
+
+Drake                    Expires 18 January 2027                [Page 6]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+      hardware (for IdP-independent assurance or cross-IdP correlation),
+      and high-assurance scenarios may require both.  This dual
+      provision is intentional, not redundant.
+
+1.2.  Requirements Language
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+   "OPTIONAL" in this document are to be interpreted as described in BCP
+   14 [RFC2119] [RFC8174] when, and only when, they appear in all
+   capitals, as shown here.
+
+1.3.  Terminology
+
+   Hardware Attestation Mechanism  A tamper-resistant hardware or
+      firmware component capable of protecting private keys and
+      producing cryptographic attestation statements verifiable to a
+      manufacturer or platform Certificate Authority.  Examples include
+      TPM 2.0 devices (discrete and firmware), PIV tokens (e.g.,
+      YubiKey), and virtual TPMs.  This document also accommodates
+      software-managed keys at a lower trust tier for agents that lack
+      hardware security components but wish to participate in the
+      reputation ecosystem.
+
+   TPM  Trusted Platform Module, as specified by the Trusted Computing
+      Group (TCG) [TCG-TPM2].  This document assumes TPM 2.0.  A TPM may
+      be a discrete chip, a firmware implementation (Intel PTT, AMD
+      fTPM), or a virtual instance provided by a hypervisor.
+
+   EK  Endorsement Key.  A unique RSA or ECC key pair generated inside
+      the TPM at manufacturing time, as profiled in [TCG-EK-PROFILE].
+      The EK private key never leaves the TPM.  The EK certificate is
+      signed by the chip manufacturer's CA and serves as the persistent
+      hardware identity for the device.
+
+   AK  Attestation Key.  A signing key created inside a hardware
+      security component, certified against the device's identity key
+      (EK for TPM, attestation certificate for PIV) to prove it resides
+      in the same device.  In this specification, the AK SHOULD be
+      created as a transient object and SHOULD NOT be persisted in non-
+      volatile storage, to avoid consuming limited hardware resources.
+      See Section 4.4.
+
+   Identity Certificate  The manufacturer-issued certificate that
+      identifies a specific hardware security component.  For TPMs, this
+      is the EK certificate.  For PIV tokens, this is the device
+      attestation certificate.  The SHA-256 hash of the
+      SubjectPublicKeyInfo DER encoding from this certificate serves as
+
+
+
+Drake                    Expires 18 January 2027                [Page 7]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+      the hardware fingerprint.  The fingerprint is derived from the
+      public key structure rather than the certificate as a whole, so
+      that the fingerprint remains stable if the manufacturer reissues
+      the certificate (e.g., to extend validity or update metadata)
+      without changing the underlying key pair.
+
+   Manufacturer CA  The Certificate Authority operated by the hardware
+      manufacturer (e.g., Intel, AMD, Infineon, Yubico) that signs
+      identity certificates.  Root CA certificates are publicly
+      available.
+
+   Agent Identity  A persistent, globally unique identifier for an
+      autonomous agent, expressed as a URN in the "aid" namespace
+      (Section 4.1).  Agent identities are assigned by issuers and are
+      bound to specific hardware via the issuer's anti-Sybil registry.
+
+   Issuer  An entity that verifies hardware attestation evidence,
+      maintains an anti-Sybil registry (ensuring one hardware device
+      maps to at most one identity), and issues trust assertions (e.g.,
+      SD-JWTs) about enrolled agents.  An Issuer is OPTIONAL for Mode 1
+      (Direct Hardware Attestation) and REQUIRED for Mode 2 (SD-JWT
+      Trust Proof).  See Section 4.5 for discovery and the federated
+      issuance model.
+
+   Trust Tier  A classification of an agent's hardware trust level,
+      assigned by an Issuer.  Defined tiers are grouped into three
+      compatibility classes, ordered from strongest to weakest anti-
+      Sybil resistance: (a) "sovereign" (genuine non-virtual hardware
+      TPM or discrete security chip) and "portable" (PIV smart card such
+      as YubiKey) -- manufacturer-attested, persistent identity; (b)
+      "virtual" (hypervisor-provided virtual TPM) and "enclave"
+      (hardware enclave such as Apple Secure Enclave) -- key isolation
+      without anti-Sybil guarantee, as both device types can be re-keyed
+      at will; (c) "declared" (software-only key, no hardware
+      attestation).  Verifiers use trust tiers to apply differentiated
+      policy.  For identities with multiple enrolled devices of
+      different types, Issuers that support multi-device identities MAY
+      report the trust tier of the device used for the most recent
+      attestation rather than a static assignment.  Verifiers SHOULD
+      therefore expect the same agent identity URN to appear with
+      different trust tier values over time.
+
+   Sybil Attack  An attack where a single adversary creates many
+      pseudonymous identities to subvert a reputation or trust system.
+
+
+
+
+
+
+
+Drake                    Expires 18 January 2027                [Page 8]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+2.  Problem Statement
+
+   The general problem -- the collapse of content, source, and volume
+   signals against capable automation, and the Sybil threat model that
+   makes cheaply-minted identities the root failure -- is stated in
+   [I-D.drake-agent-identity-problem-statement] and is not restated
+   here.
+
+   Its email-specific form: anti-spam defenses have worked by imposing
+   costs (CAPTCHAs, IP reputation, phone verification) that AI senders
+   now eliminate.  Hardware attestation re-introduces a cost floor no
+   software can remove: each hardware-anchored sender identity requires
+   a physical security component, roughly $20-2000 per identity versus
+   approximately zero for software-only identities, and because each
+   hardware identity is unique and persistent, a device that sends abuse
+   is flagged permanently -- the attacker needs new silicon, not a new
+   account.  Software-only agents still participate, at a trust tier
+   every receiver can see.
+
+3.  Applicability
+
+   This specification targets authentication of automated senders -- AI
+   agents, bots, and high-volume automated systems -- where Sybil
+   resistance justifies hardware-anchored identity.  The proliferation
+   of autonomous AI agents capable of generating human-quality content
+   at scale is the primary motivation.
+
+   This specification is NOT intended or recommended for individual
+   human users sending personal or low-volume email.  Human senders
+   using consumer mail user agents (e.g., Gmail web client, Outlook)
+   face privacy risks from Mode 1 Direct Attestation that are
+   disproportionate to the benefit: the hardware fingerprint uniquely
+   identifies the sending device across all messages and contexts,
+   enabling long-term tracking that exceeds current email privacy norms.
+   Mode 2 (SD-JWT Trust Proof) mitigates this via selective disclosure
+   but requires enrollment with an Issuer, which is not a typical
+   consumer workflow.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Drake                    Expires 18 January 2027                [Page 9]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   Mail User Agents (MUAs) designed for interactive human use MUST NOT
+   enable Direct Hardware Attestation (Mode 1) by default.  Activation
+   MUST require explicit, per-device user consent that warns of
+   persistent cross-context tracking before any attestation header is
+   added to outgoing messages.  Operators of human-facing email services
+   MAY offer hardware attestation as an opt-in feature (e.g., via a
+   browser extension or MUA plugin), but MUST provide clear disclosure
+   of the linkability implications before activation.  Receivers SHOULD
+   NOT penalize the absence of hardware attestation from senders
+   exhibiting human-characteristic patterns (e.g., low volume, natural
+   language variance, interactive reply chains).
+
+   For human identity proofs in email, existing mechanisms such as S/
+   MIME [RFC8551] and DANE [RFC7671] remain appropriate.
+
+   Regulatory note: Article 50 of the European Union's AI Act
+   (Regulation (EU) 2024/1689) requires, from 2 August 2026, that AI
+   systems interacting with people disclose their nature, and that
+   providers of generative AI systems mark their outputs in a machine-
+   readable format detectable as artificially generated.  The
+   attestation headers defined here are a machine-readable,
+   cryptographically verifiable declaration of automated origin, bound
+   to the sending agent's identity; deployments subject to such
+   transparency obligations MAY use them as a component of compliance
+   for agent-generated email, alongside any content-marking techniques
+   the regulation's guidelines require.
+
+   The attestation formats are transport-independent by design (see
+   Section 1.1); this document specifies the email transport binding as
+   the primary application.
+
+4.  Architecture
+
+   This section defines the identity model, hardware mechanism taxonomy,
+   key lifecycle, and issuer discovery procedures that underpin both
+   attestation modes.
+
+4.1.  Agent Identity Format
+
+   Agent identities are URNs in the "aid" namespace, whose syntax,
+   canonical-identifier generation, handle model, and IANA registration
+   are defined in [I-D.drake-agent-identity-registry].  For the purposes
+   of this document a verifier needs only the following properties.  An
+   aid URN has the form urn:aid:namespace:agent-id, where the namespace
+   is a governance-allocated label (for example global) and the agent-id
+   is either a permanent _canonical identifier_ (prefix id-) or a
+   retirable _handle_ (which never begins with id-).  Examples:
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 10]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   *  urn:aid:global:id-qkckh-xxtcw-cxbvp-gpskg -- canonical, permanent
+
+   *  urn:aid:global:crusty -- handle for the same agent
+
+   Canonical identifiers are never reassigned, even after
+   decommissioning -- the property reputation systems depend on.
+   Verifiers and reputation systems MUST key long-lived state on the
+   canonical form, never on a handle.  The namespace carries no issuer
+   information: which Issuer currently services an identity is a mutable
+   relationship, discoverable through the registry
+   ([I-D.drake-agent-identity-resolution]), never encoded in the name.
+   The URN scheme and NID are case-insensitive; the namespace and agent-
+   id are lowercase.
+
+4.2.  Identity-to-Hardware Cardinality
+
+   The agent identity URN (aid) and the hardware fingerprint serve as
+   dual trust anchors (see "Dual Trust Anchors" in Section 1.1).  The
+   cardinality rules that relate them -- one device backs at most one
+   identity, permanently; one identity may be backed by several devices
+   without amplifying reputation; disabled devices are never re-
+   enrollable; tier-compatibility groups, upward-only tier transitions
+   with burn-on-upgrade and co-presence verification -- are the anti-
+   Sybil invariants and lifecycle rules of
+   [I-D.drake-agent-identity-registry], which Issuers under this
+   specification MUST enforce.
+
+   Two consequences matter to verifiers of this transport.  First, a
+   given aid may legitimately appear with different hardware
+   fingerprints over its lifetime (migration, backup, capacity), and
+   with different trust tier values across messages: the typ parameter
+   (Mode 1) and trust_tier claim (Mode 2) describe the device used for
+   that attestation, not a static property.  Second, verifiers SHOULD
+   use the aid URN as the primary reputation key, with the hardware
+   fingerprint as a secondary, Issuer-independent signal.
+
+4.3.  Hardware Attestation Mechanisms
+
+   This specification supports multiple hardware security technologies
+   through a common abstraction.  Each mechanism provides an identity
+   certificate and a signing capability (used for per-message
+   attestation).  For sovereign and portable tiers, the identity
+   certificate is signed by the hardware manufacturer; for enclave and
+   virtual tiers, the identity certificate is issued by the Issuer.  The
+   hardware type is declared in the attestation header via the "typ"
+   parameter.
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 11]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   +=======+=========================+====================+===========+
+   | typ   | Technology              | Identity           | Trust     |
+   | value |                         | Certificate        | Tier      |
+   +=======+=========================+====================+===========+
+   | TPM   | TPM 2.0 (discrete or    | EK Certificate     | sovereign |
+   |       | firmware)               |                    |           |
+   +-------+-------------------------+--------------------+-----------+
+   | PIV   | PIV smart card (e.g.,   | Device Attestation | portable  |
+   |       | YubiKey)                | Certificate        |           |
+   +-------+-------------------------+--------------------+-----------+
+   | ENC   | Hardware enclave (e.g., | Issuer-certified   | enclave   |
+   |       | Apple Secure Enclave)   | enclave key        |           |
+   |       |                         | certificate        |           |
+   +-------+-------------------------+--------------------+-----------+
+   | VRT   | Virtual TPM             | vTPM EK            | virtual   |
+   |       | (hypervisor-provided)   | Certificate        |           |
+   +-------+-------------------------+--------------------+-----------+
+   | SFT   | Software-managed key    | Issuer-signed      | declared  |
+   |       |                         | certificate        |           |
+   +-------+-------------------------+--------------------+-----------+
+
+                                 Table 1
+
+   Additional hardware types MAY be defined in future specifications by
+   registering new "typ" values with IANA (see Section 13).
+
+   For TPM-based attestation (typ=TPM), the identity certificate is the
+   Endorsement Key (EK) certificate, provisioned at manufacturing time
+   and stored in the TPM's non-volatile memory.  The EK certificate
+   chains to the TPM manufacturer's root CA (e.g., Intel, AMD,
+   Infineon).
+
+   For PIV-based attestation (typ=PIV), the identity certificate is the
+   device attestation certificate issued by the token manufacturer
+   (e.g., Yubico).  The signing key is a PIV authentication key resident
+   on the token.
+
+   For hardware enclave attestation (typ=ENC), the signing key resides
+   in a tamper-resistant hardware enclave integrated into the device's
+   system-on-chip (e.g., the Secure Enclave Processor on Apple silicon).
+   Unlike discrete TPMs and PIV tokens, hardware enclaves do not provide
+   manufacturer-issued identity certificates with a chain to a publicly
+   available root CA, and critically, they do not support persistent
+   attestation identities: the enclave key can be destroyed and
+   regenerated at will by the device owner.  This means hardware
+   enclaves provide NO anti-Sybil guarantee -- a single device can
+   generate an unlimited number of distinct enclave keys over time.  For
+   this reason, the "enclave" trust tier is placed in the same
+
+
+
+Drake                    Expires 18 January 2027               [Page 12]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   compatibility group as virtual TPMs (typ=VRT), which share the same
+   re-keying limitation.  The identity certificate for typ=ENC is issued
+   by the Issuer at enrollment time after verifying that the key was
+   generated inside the enclave using a trust-on-first-use (TOFU) model.
+   Note that the Secure Enclave performs internal hashing (ECDSA with
+   SHA-256 over the raw input rather than a pre-hashed digest);
+   implementations MUST pass the raw attestation-input bytes (72 bytes)
+   to the enclave signing function, NOT the attestation-digest.
+
+   For virtual TPM attestation (typ=VRT), the identity certificate is
+   the vTPM's EK certificate, signed by the hypervisor vendor's CA
+   (e.g., VMware, Microsoft).  Verifiers MUST distinguish virtual from
+   physical hardware; see Section 8.3 for Sybil resistance implications.
+
+   For software-only attestation (typ=SFT), the signing key is a
+   software-managed key pair with no hardware protection.  The identity
+   certificate is issued by the Issuer at enrollment time.  Software-
+   only attestation provides no hardware-based Sybil resistance but
+   allows agents to participate in the reputation ecosystem at a lower
+   trust tier.  A legitimate agent that protects its key and builds
+   reputation over time can achieve meaningful trust even without
+   hardware backing.
+
+4.4.  Transient Key Model
+
+   For TPM-based attestation, this specification RECOMMENDS a transient
+   key model in which the Attestation Key (AK) is created as a transient
+   TPM object (via TPM2_CreatePrimary) and is NOT persisted in the TPM's
+   non-volatile (NV) storage.  This avoids consuming limited NV slots,
+   which are a scarce resource on most TPMs (typically 3-7 loaded
+   objects at once).
+
+   The transient key lifecycle is:
+
+   1.  *Read EK certificate* from the TPM's NV storage (index 0x01C00002
+       for RSA EK).  This is a read-only operation.  The EK certificate
+       MAY be cached indefinitely as it does not change.
+
+   2.  *Create transient AK* via TPM2_CreatePrimary under the
+       endorsement hierarchy with a fixed template.  Because the
+       template and the Endorsement Primary Seed (EPS) are constant,
+       this deterministically produces the same key on every invocation.
+
+
+
+
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 13]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   3.  *Binding verification* (one-time, during enrollment with an
+       Issuer): The Issuer creates a credential challenge
+       (TPM2_MakeCredential) encrypted to the EK; the agent decrypts it
+       (TPM2_ActivateCredential), proving the AK resides in the same TPM
+       as the EK.  The resulting AK certificate is stored client-side
+       (outside the TPM) and reused across signing operations.
+
+   4.  *Sign* the attestation content with the transient AK (TPM2_Sign).
+
+   5.  *Flush* the transient AK handle (TPM2_FlushContext) to free the
+       object slot.
+
+   Implementations SHOULD flush transient objects immediately after use.
+   If TPM2_CreatePrimary returns TPM_RC_OBJECT_MEMORY (0x0902), the
+   implementation MUST flush existing transient handles and retry.
+
+   The EK certificate is the persistent hardware identifier.  The AK is
+   ephemeral infrastructure -- it exists only long enough to produce a
+   signature, then is discarded.  No data is written to the TPM's non-
+   volatile memory at any point in this protocol.
+
+   The transient AK is deterministic within a given Endorsement Primary
+   Seed (EPS) epoch.  The EPS is re-randomized when the TPM is cleared
+   (TPM2_Clear) or reset to factory defaults.  After such an event, the
+   AK public key changes and the agent MUST re-enroll with its Issuer to
+   establish a new AK-to-EK binding.  The EK certificate remains
+   constant across TPM clears, so the hardware identity persists even
+   though the AK changes.
+
+   Note: On some platform configurations (particularly Windows with
+   default TPM Base Services policy), reading the EK certificate from NV
+   storage may require a one-time operating system configuration change
+   or elevated access during initial enrollment.  Once the EK
+   certificate has been read and cached client-side, subsequent
+   attestation operations do not require elevation.  Implementations
+   that cannot read the EK certificate directly MAY derive the EK public
+   key via TPM2_CreatePrimary with the TCG EK template and use the
+   resulting public key hash as the hardware fingerprint; verifiers can
+   then query manufacturer APIs (e.g., Intel Trusted Services) to obtain
+   the full certificate if needed for chain validation.  Alternatively,
+   the Issuer can perform EK certificate extraction during enrollment
+   and include it in the AK certificate it issues.
+
+
+
+
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 14]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+4.5.  Issuer Discovery
+
+   The agent identity URN carries no issuer information: which Issuer
+   currently services an identity is a mutable relationship, not part of
+   the name (Section 4.1).  A verifier learns the Issuer's domain from
+   the attestation artifact itself: for Mode 2, the SD-JWT iss claim;
+   for Mode 1, the issuer of the AK certificate in the CMS chain.  A
+   verifier that needs the authoritative issuer-of-record for an
+   identity -- for example, to detect a forged iss pointing at an
+   attacker-controlled domain -- resolves the URN through the registry's
+   public RDAP profile ([I-D.drake-agent-identity-resolution]), whose
+   record names the identity's current issuer.
+
+   Given the Issuer's domain, the verifier discovers its signing key and
+   endpoints through the mechanisms below.  The DNS-based method is
+   RECOMMENDED for email because it piggybacks on infrastructure that
+   mail servers already query for DKIM, SPF, and DMARC, requires no
+   outbound HTTPS connections during verification, and inherits the same
+   domain-ownership guarantees that protect existing email
+   authentication.
+
+4.5.1.  DNS-Published Issuer Key
+
+   Issuers SHOULD publish their SD-JWT signing key as a DNS TXT record
+   at the well-known name _hwattest.{domain}, following the same pattern
+   as DKIM key records ([RFC6376] Section 3.6).
+
+   Example DNS TXT record:
+
+     _hwattest.1id.com.  IN TXT (
+       "v=hwattest1; alg=ES256; "
+       "p=MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE..."
+     )
+
+   The TXT record value uses a tag=value format with semicolon
+   separators:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 15]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   hwattest-record = hwattest-version ";" SP
+                     hwattest-alg ";" SP
+                     hwattest-key
+                     [";" SP hwattest-kid]
+                     [";" SP hwattest-status]
+
+   hwattest-version = "v" "=" "hwattest1"
+   hwattest-alg     = "alg" "=" jws-algorithm
+   hwattest-key     = "p" "=" base64
+   hwattest-kid     = "kid" "=" 1*VCHAR
+   hwattest-status  = "t" "=" ("active" / "revoked")
+
+   jws-algorithm    = "ES256" / "PS256" / "RS256"
+                      ; other JWS algorithms may be added
+
+   v  REQUIRED.  Version.  MUST be "hwattest1".
+
+   alg  REQUIRED.  The JWS algorithm used by the Issuer to sign SD-JWTs
+      (e.g., "ES256", "PS256").
+
+   p  REQUIRED.  The Issuer's public key, base64-encoded.  This is the
+      SubjectPublicKeyInfo (SPKI) DER encoding for all key types, EC and
+      RSA alike.  This is analogous to the DKIM p= tag ([RFC6376]
+      Section 3.6.1) but uses SPKI uniformly to avoid per-algorithm
+      encoding variants.
+
+   kid  OPTIONAL.  Key identifier matching the kid in the SD-JWT header.
+      When present, verifiers use this to select the correct key if the
+      Issuer rotates keys.
+
+   t  OPTIONAL.  Key type: "active" (default) or "revoked".  When set to
+      "revoked", verifiers MUST reject SD-JWTs signed with this key.
+      This allows Issuers to revoke a compromised key via a DNS update
+      without waiting for TTL expiry of cached JWKS responses.
+
+   Verifiers MUST query this DNS record before falling back to HTTPS-
+   based discovery.  The DNS TTL controls caching; Issuers SHOULD set a
+   TTL between 3600 and 86400 seconds (1 to 24 hours).  For key
+   rotation, the Issuer publishes the new key in DNS, waits for the old
+   TTL to expire, then marks the old key as revoked.
+
+   This approach provides several security advantages for email
+   verification:
+
+   *  No outbound HTTPS connections during mail processing, eliminating
+      DDoS amplification and SSRF risks that external URI fetches would
+      introduce.
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 16]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   *  Domain ownership is proven by DNS control, the same trust anchor
+      used by DKIM and SPF.  A forged Hardware-Trust-Proof header
+      claiming an Issuer domain the attacker does not control will fail
+      verification because the attacker cannot publish a matching DNS
+      key record.
+
+   *  DNS infrastructure is already hardened against abuse by mail
+      operators (rate limiting, caching, DNSSEC).
+
+   *  Key revocation propagates through DNS TTL expiry, providing a
+      well-understood and operationally familiar mechanism.
+
+4.5.2.  HTTPS-Based Discovery (Fallback)
+
+   When no DNS TXT record is found at _hwattest.{domain}, or when the
+   verifier operates in a non-email context (e.g., HTTP API
+   verification), the verifier MAY discover the Issuer's key via HTTPS:
+
+   OIDC Discovery  https://{domain}/.well-known/openid-configuration -
+      Standard OpenID Connect discovery document containing the JWKS URI
+      for SD-JWT signature verification.
+
+   Issuer Metadata (OPTIONAL)  https://{domain}/.well-known/aid-
+      issuer.json - JSON document describing the Issuer's capabilities,
+      supported trust tiers, enrollment endpoint, and anti-Sybil policy.
+
+   Manufacturer CA Trust Store (OPTIONAL)  https://{domain}/.well-known/
+      hw-manufacturer-cas.pem - PEM-encoded bundle of hardware
+      manufacturer root CA certificates that this Issuer accepts during
+      enrollment.  Verifiers performing Mode 1 verification SHOULD
+      maintain their own trust store rather than relying on this
+      endpoint.
+
+   Verifiers using HTTPS-based discovery SHOULD cache the JWKS with a
+   TTL of at least 1 hour and at most 24 hours.  Verifiers MUST NOT
+   follow redirects to domains other than the Issuer's domain, to
+   prevent open-redirect attacks.
+
+5.  Mode 1: Direct Hardware Attestation
+
+   This section defines a CMS-based attestation bundle containing a
+   hardware-anchored signature and its full certificate chain, presented
+   here as an email header field.  The CMS structure is transport-
+   independent (see Section 1.1).
+
+
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 17]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+5.1.  Attestation Evidence Structure
+
+   A word on what "chain" means here, because it is easy to read too
+   much into the term.  The message is signed by the hardware
+   attestation key (AK).  The AK itself carries no manufacturer
+   certificate -- manufacturers certify only the device's identity key
+   (the TPM Endorsement Key or the PIV device attestation key), never a
+   locally created AK.  The link that makes the AK trustworthy is
+   created at enrollment: the Issuer (the agent's chosen Registrar)
+   cryptographically verifies, through the co-residency ceremony
+   (Section 5), that the AK lives in the same genuine hardware device as
+   a manufacturer-certified identity key, and then signs an AK
+   certificate attesting exactly that.  That Issuer signature is the
+   load-bearing link in the chain.
+
+   Consequently a verifier's trust in the AK is trust in the Issuer's
+   enrollment check, and the certificate chain terminates at the
+   Issuer's CA.  This is not a weakness to be apologized for: a relying
+   party has already chosen which Issuers it accepts, exactly as it
+   chooses which certificate authorities or which domains it trusts --
+   to accept an Issuer's identities is, by definition, to accept that
+   Issuer's enrollment checks.  Where the deploying hardware also lets
+   the full manufacturer chain travel in the message (the EK certificate
+   plus the AK-to-EK binding evidence), the chain MAY instead terminate
+   at a manufacturer root and be verified with no Issuer trust at all;
+   that manufacturer-rooted form is the stronger but less commonly
+   available option, and every live example in Appendix B uses the
+   Issuer-certified form.  The elements below are listed leaf to root;
+   in the Issuer-certified form the identity certificate and
+   manufacturer chain are replaced by the Issuer's CA chain.
+
+   1.  *AK Certificate:* Issued by an Issuer after successful completion
+       of the binding verification protocol (e.g., TPM2_MakeCredential /
+       TPM2_ActivateCredential for TPMs, or manufacturer attestation
+       verification for PIV tokens).  Binds the AK public key to the
+       hardware device identified by the identity certificate.  If no
+       Issuer enrollment has been performed, the AK certificate MAY be
+       self-signed; verifiers SHOULD treat self-signed AK certificates
+       as lower trust than Issuer-certified ones.
+
+   2.  *Identity Certificate:* Issued by the hardware manufacturer at
+       fabrication time.  For TPMs, this is the EK certificate.  For PIV
+       tokens, this is the device attestation certificate.  Contains the
+       hardware identity public key, manufacturer identity, and device
+       information.  Signed by the manufacturer's intermediate CA.
+
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 18]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   3.  *Manufacturer Intermediate CA Certificate(s):* Zero or more
+       intermediate CA certificates forming the chain between the
+       identity certificate issuer and the manufacturer root.
+
+   4.  *Manufacturer Root CA Certificate:* The trust anchor.  This
+       certificate SHOULD already be present in the verifier's trust
+       store.  Major manufacturer root CAs are published at well-known
+       URLs (e.g., Intel's Trusted Services API, AMD's Key Distribution
+       Server, Yubico's attestation CA).
+
+5.2.  Header Field Definition
+
+   This document defines the "Hardware-Attestation" header field for use
+   in email messages.
+
+   Hardware-Attestation = "Hardware-Attestation" ":" SP hw-attest-value
+                          CRLF
+
+   hw-attest-value = hw-version ";" SP
+                     hw-type ";" SP
+                     hw-algorithm ";" SP
+                     hw-signed-hdrs ";" SP
+                     hw-body-hash ";" SP
+                     hw-timestamp ";" SP
+                     hw-chain
+                     [";" SP hw-aid]
+
+   hw-version     = "v" "=" "1"
+   hw-type        = "typ" "=" ("TPM" / "PIV" / "ENC" / "VRT" / "SFT")
+   hw-algorithm   = "alg" "=" ("RS256" / "ES256" / "PS256")
+   hw-signed-hdrs = "h" "=" hdr-name *(":" hdr-name)
+   hw-body-hash   = "bh" "=" base64url
+   hw-timestamp   = "ts" "=" 1*DIGIT
+   hw-chain       = "chain" "=" base64
+   hw-aid         = "aid" "=" aid-urn
+
+   hdr-name       = field-name  ; as defined in RFC 5322
+   base64url      = *( ALPHA / DIGIT / "-" / "_" )
+                                 ; URL-safe base64 per RFC 4648 Sec 5
+   base64         = *( ALPHA / DIGIT / "+" / "/" / "=" )
+                                 ; standard base64 per RFC 4648 Sec 4
+
+   The base64url and base64 encodings follow [RFC4648].
+
+   Where:
+
+   v  Protocol version.  MUST be "1" for this specification.
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 19]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   typ  The hardware attestation mechanism type.  "TPM" for Trusted
+      Platform Module (discrete or firmware), "PIV" for Personal
+      Identity Verification smart card, "ENC" for hardware enclave
+      (e.g., Apple Secure Enclave), "VRT" for virtual TPM, "SFT" for
+      software-managed key.  Additional values MAY be registered with
+      IANA.
+
+   alg  The signature algorithm used by the AK.  MUST be one of RS256
+      (RSASSA-PKCS1-v1_5 with SHA-256), ES256 (ECDSA with P-256 and SHA-
+      256), or PS256 (RSASSA-PSS with SHA-256).  RS256 is included for
+      compatibility with existing TPM 2.0 deployments where RSA keys are
+      pre-provisioned; new deployments SHOULD prefer PS256 (for RSA) or
+      ES256 (for ECC).  ES256 is RECOMMENDED for PIV tokens.  The set of
+      acceptable algorithm values is maintained by the Governance
+      Authority as a published, versioned list -- the same body and
+      mechanism that maintains the Global Hardware Trust Store of
+      acceptable manufacturer roots
+      ([I-D.drake-agent-identity-registry]) -- so that algorithms can be
+      added or retired operationally without revising this
+      specification.  This document defines the initial list (RS256,
+      ES256, PS256); verifiers MUST reject any algorithm value not on
+      the current published list.  If SHA-256 is deprecated in the
+      future, a new protocol version (v=2) would be required, as the
+      hash algorithm is embedded in the attestation-digest construction.
+
+   h  A colon-separated list of header field names included in the
+      h-hash computation, following the same conventions as the DKIM h=
+      tag ([RFC6376] Section 3.5), including its oversigning convention:
+      a field name MAY be listed more times than it occurs in the
+      message, in which case the surplus listings contribute nothing to
+      the hash but any later-added instance of that field invalidates
+      the signature.  The listed headers are canonicalized and
+      concatenated (in the order listed) before hashing.  Signers MUST
+      include at minimum: From, To, Subject, Date, and Message-ID.
+      Signers SHOULD oversign From, To, and Subject (to block header-
+      addition attacks that alter the displayed sender or subject), and
+      SHOULD include and oversign Reply-To when present (to block reply-
+      redirection).  Signers SHOULD also include any Hardware-Trust-
+      Proof header present in the same message.  The Hardware-
+      Attestation header itself is always implicitly appended last (with
+      the chain parameter value replaced by the empty string during
+      computation, following the same self-inclusion technique as DKIM-
+      Signature per [RFC6376] Section 3.7).  The Hardware-Attestation
+      header MUST NOT appear in the h= list.  Because the header is
+      included in h-hash, all of its parameters (including aid, typ,
+      alg, bh, ts) are cryptographically bound to the signature.
+
+   bh  The base64url-encoded SHA-256 hash of the canonicalized email
+
+
+
+Drake                    Expires 18 January 2027               [Page 20]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+      body, computed using DKIM simple body canonicalization exclusively
+      (Section 3.4.3 of [RFC6376]).  DKIM relaxed body canonicalization
+      is NOT used for body hashing in this specification; only simple
+      canonicalization is supported, to ensure deterministic
+      verification without requiring a canonicalization algorithm
+      negotiation parameter.
+
+   ts  Unix timestamp (seconds since 1970-01-01T00:00:00Z) at which the
+      attestation signature was created.  Unlike DKIM-Signature, this
+      specification does not define a sender-declared expiry tag
+      (analogous to DKIM's x= parameter).  Verifiers SHOULD apply their
+      own freshness policy based on ts (e.g., rejecting attestations
+      older than a configured threshold).  A future version of this
+      specification MAY introduce an optional expiry parameter if
+      operational experience demonstrates the need for sender-declared
+      attestation lifetimes.
+
+   chain  A base64-encoded CMS SignedData structure ([RFC5652]), using
+      the SignedData content type (OID 1.2.840.113549.1.7.2).  The
+      encapContentInfo MUST be absent (detached signature).  The chain
+      parameter MUST be present; the full CMS structure is always inline
+      in the header, ensuring that verifiers can perform cryptographic
+      validation without any external fetches.  The CMS structure
+      contains: (a) the AK signature over the attestation digest (see
+      below); (b) the AK certificate (Issuer-certified or self-signed);
+      (c) the identity certificate (EK certificate for TPM, device
+      attestation certificate for PIV); and (d) any intermediate CA
+      certificates.
+
+      The signed content is the SHA-256 hash of the concatenation of
+      three fixed-length fields:
+
+        attestation-input = h-hash || bh-raw || ts-bytes
+        attestation-digest = SHA-256(attestation-input)
+        signature = Sign(AK, attestation-digest)
+
+        h-hash   = SHA-256(canonicalized-headers)  ; 32 bytes
+        bh-raw   = SHA-256(canonicalized body)     ; 32 bytes
+        ts-bytes = big-endian uint64(ts)           ; 8 bytes
+
+      The attestation-input is exactly 72 bytes (32 + 32 + 8).  The
+      canonicalized-headers input to h-hash is computed as follows: take
+      the headers named in the h= parameter, in the order listed, each
+      canonicalized per DKIM relaxed header canonicalization ([RFC6376]
+      Section 3.4.2) and terminated with CRLF.  Then append the
+      Hardware-Attestation header itself, canonicalized the same way,
+      with the chain parameter value replaced by the empty string, and
+      without a trailing CRLF (matching the DKIM-Signature self-
+
+
+
+Drake                    Expires 18 January 2027               [Page 21]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+      inclusion convention in [RFC6376] Section 3.7).  Because the
+      Hardware-Attestation header contains the aid, typ, alg, bh, and ts
+      parameters in their wire format, all of these values are
+      cryptographically bound by h-hash.  In particular, the aid
+      parameter cannot be modified after signing without changing h-hash
+      and therefore invalidating the signature.
+
+   aid  OPTIONAL.  The sender's agent identity URN as defined in
+      Section 4.1.  Because the Hardware-Attestation header is
+      implicitly included in the canonicalized-headers input to h-hash
+      (see the h and chain parameters above), the aid value is
+      cryptographically bound to the signature.  Substitution or
+      modification of the aid after signing invalidates the attestation.
+      The agent identity URN is the RECOMMENDED primary key for
+      reputation tracking; verifiers SHOULD prefer aid over the hardware
+      fingerprint when both are available, as the agent identity
+      persists across hardware migrations (see Section 4.2).  When aid
+      is absent, the verifier can still validate the hardware
+      certificate chain but has only the hardware fingerprint for
+      reputation tracking.
+
+5.3.  Verification Algorithm
+
+   A receiving mail server that supports this specification MUST perform
+   the following steps when a Hardware-Attestation header is present:
+
+   1.   Parse the Hardware-Attestation header field and extract v, typ,
+        alg, h, bh, ts, chain, and (if present) aid.  If parsing fails,
+        the result is "none" (header malformed).
+
+   2.   Verify that v equals "1".  If not, the result is "none"
+        (unsupported version).
+
+   3.   Verify that h lists at minimum From, To, Subject, Date, and
+        Message-ID.  Compute h-hash as defined in Section 5.2:
+        canonicalize the listed headers using DKIM relaxed header
+        canonicalization ([RFC6376] Section 3.4.2), each terminated with
+        CRLF, then append the Hardware-Attestation header itself
+        (canonicalized the same way, with the chain value replaced by
+        the empty string, without a trailing CRLF), and compute SHA-256
+        over the result.
+
+   4.   Compute the SHA-256 hash of the canonicalized email body using
+        DKIM simple body canonicalization ([RFC6376] Section 3.4.3).
+        Base64url-decode the bh parameter value and compare the
+        resulting octets with the computed hash (exact byte-for-byte
+        comparison).  If they differ, the result is "fail" (body
+        modified).
+
+
+
+Drake                    Expires 18 January 2027               [Page 22]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   5.   Verify that ts is within an acceptable window of the current
+        time.  A window of 300 seconds (5 minutes) is RECOMMENDED for
+        direct SMTP delivery.  Verifiers SHOULD allow a wider window (up
+        to 3600 seconds / 1 hour) for messages that have passed through
+        intermediate MTAs, as indicated by Received headers or queue
+        delays.  Messages delayed by greylisting (typically 15-30
+        minutes) or by temporary MTA failures (potentially hours) may
+        exceed even this wider window.  Verifiers evaluating messages
+        where the cryptographic signature is valid but the timestamp has
+        expired SHOULD record the result as "pass" with an informational
+        note about the timestamp age, rather than a hard "fail", because
+        the signature's integrity is unaffected by delivery delays.
+        Once the first inbound MTA (the MX record host) has verified the
+        attestation and recorded the result in an Authentication-Results
+        header, downstream systems SHOULD rely on that recorded result
+        (potentially protected by ARC [RFC8617]) rather than re-
+        evaluating timestamps.
+
+   6.   Decode the base64 chain parameter to obtain the CMS SignedData
+        structure.  Parse the CMS SignedData structure and extract the
+        signer certificate (AK certificate) and the certificate chain.
+
+   7.   Validate the certificate chain:
+
+        a.  The AK certificate MUST contain evidence binding the AK
+            public key to the identity certificate's device.  For TPM-
+            based attestation, this is a TPM2_Certify structure (either
+            in an X.509 extension or as the certificate's subject public
+            key attestation).  For PIV-based attestation, this is the
+            manufacturer's attestation certificate chain (e.g., Yubico's
+            attestation certificate that certifies the key was generated
+            on the device).  For Issuer-certified AK certificates, the
+            Issuer verified this binding during enrollment and the AK
+            certificate is signed by the Issuer's CA.  For self-signed
+            AK certificates, the verifier SHOULD treat the binding as
+            unverified and reduce trust accordingly.
+
+        b.  The identity certificate MUST chain to a manufacturer
+            intermediate CA certificate.
+
+        c.  The manufacturer intermediate CA MUST chain to a
+            manufacturer root CA present in the verifier's hardware
+            manufacturer CA trust store.
+
+        If chain validation fails, the result is "fail" (chain invalid).
+
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 23]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   8.   Reconstruct the attestation-digest as defined in Section 5.2:
+        concatenate h-hash (32 bytes), bh-raw (32 bytes, the raw SHA-256
+        digest of the canonicalized body), and ts-bytes (8 bytes, big-
+        endian uint64 of ts), then compute SHA-256 over the 72-byte
+        result.  Verify the CMS signature over this digest using the AK
+        public key and the algorithm specified by alg.  If signature
+        verification fails, the result is "fail" (bad signature).
+        Because the Hardware-Attestation header (including the aid
+        parameter) is included in the canonicalized-headers input to
+        h-hash, any modification to any header parameter after signing
+        causes verification to fail.
+
+   9.   If all checks pass, the result is "pass".  The verifier MAY
+        extract the following information from the certificate chain and
+        header:
+
+        *  Hardware type (from typ parameter)
+
+        *  Hardware manufacturer (from identity certificate issuer)
+
+        *  Device model or family (from identity certificate extensions)
+
+        *  Hardware fingerprint: SHA-256 hash of the identity
+           certificate's public key
+
+        *  Agent identity URN (from aid parameter, if present)
+
+   10.  If aid is present, the verifier MAY additionally:
+
+        a.  Discover the Issuer's endpoints per Section 4.5.
+
+        b.  Query reputation services using the aid URN as a lookup key.
+
+        c.  Apply differentiated policy based on the agent's trust tier
+            and reputation history.
+
+5.4.  Authentication-Results Integration
+
+   When recording the result of Hardware-Attestation verification in an
+   Authentication-Results header field [RFC8601], the following method
+   identifier and property types are used:
+
+
+
+
+
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 24]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   Authentication-Results: mx.example.com;
+     hw-attest=pass
+       header.typ=TPM
+       header.alg=RS256
+       header.mfr=INTC
+       header.tier=sovereign
+       header.fp=sha256:a1b2c3d4...
+       header.aid=urn:aid:global:id-qkckh-xxtcw-cxbvp-gpskg
+
+   Where:
+
+   hw-attest  The method identifier.  Result is one of: "pass", "fail",
+      "none" (header absent or unparseable), "temperror" (transient
+      verification error), or "permerror" (permanent verification
+      error).
+
+   header.typ  The hardware type from the Hardware-Attestation header.
+
+   header.alg  The signature algorithm.
+
+   header.mfr  The manufacturer code extracted from the identity
+      certificate.  Common values: "INTC" (Intel), "AMD" (AMD), "IFX"
+      (Infineon), "STM" (STMicroelectronics), "NTC" (Nuvoton), "YBK"
+      (Yubico), "VMW" (VMware, virtual TPM).
+
+   header.tier  The inferred trust tier based on the hardware type and
+      manufacturer.  Values: "sovereign", "portable", "enclave",
+      "virtual", "declared".
+
+   header.fp  The SHA-256 hash of the identity certificate's public key,
+      truncated to the first 16 hex characters.  Serves as a compact
+      hardware fingerprint for reputation tracking.  Full fingerprint
+      SHOULD be available via an extended property.
+
+   header.aid  The agent identity URN from the aid parameter, if
+      present.  Omitted if no aid was provided.
+
+5.5.  Privacy Considerations for Direct Attestation
+
+   Direct Hardware Attestation reveals the sender's persistent hardware
+   fingerprint to every recipient.  This linkability is a deliberate
+   design choice for reputation systems; see Section 15.2 for the full
+   privacy analysis and Section 15.3 for the privacy-preserving
+   alternative.
+
+
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 25]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+6.  Mode 2: SD-JWT Trust Proof
+
+   This section defines an SD-JWT-based trust proof using [RFC9901].
+   Like the CMS bundle in Mode 1, the SD-JWT is transport-independent
+   (see Section 1.1).
+
+6.1.  Overview
+
+   SD-JWT Trust Proof provides a privacy-preserving attestation
+   mechanism where an Issuer (an entity that has previously verified the
+   sender's hardware attestation) issues a per-message Selective
+   Disclosure JWT [RFC9901] containing claims about the sender's trust
+   classification and a cryptographic binding to the specific email
+   being sent.
+
+   The claim structure is JWT-shaped rather than a formal profile of the
+   Entity Attestation Token (EAT) framework [RFC9711].  This choice
+   prioritizes deployment in JSON/JWT-native email infrastructure over
+   alignment with the CBOR-leaning EAT ecosystem, which is currently
+   most heavily deployed in IoT contexts via ARM's PSA Certified program
+   ([RFC9783]).  EAT's UEID, security-level, and profile mechanisms
+   overlap with AID concepts (canonical identifier, trust tier, and
+   namespace); AID claim names are chosen to be compatible with the EAT
+   claims registry where overlap exists.  A future revision MAY define a
+   formal EAT profile binding for Mode 2 tokens.
+
+   For each outgoing email, the sending agent computes a message-binding
+   hash (covering the email headers and body) and submits it to the
+   Issuer over an authenticated channel.  The Issuer verifies that the
+   requesting agent is currently enrolled with valid hardware, creates
+   an SD-JWT containing the message-binding hash as a nonce claim, and
+   returns the signed token with disclosure values for all selectively
+   disclosable claims.  The agent then selects which claims to reveal
+   and includes the SD-JWT presentation in the email header.
+
+   Because the Issuer signs the SD-JWT (not the agent), no agent-
+   specific key appears in the token.  A recipient learns only what the
+   sender chose to disclose -- for example, "my hardware trust tier is
+   sovereign" -- without learning the sender's identity, hardware
+   fingerprint, or any other persistent identifier.  The Issuer
+   identifier (iss) and the message-binding nonce are always visible;
+   all other claims are selectively disclosable.
+
+   This mode requires the recipient to trust the Issuer's signing key
+   (obtainable via DNS or the Issuer's JWKS endpoint per Section 4.5).
+   It does NOT require trust in any hardware manufacturer CA, as the
+   Issuer has already performed that verification during enrollment.
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 26]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   The per-message Issuer interaction is the cost of full unlinkability:
+   the agent must contact the Issuer for each email, and the Issuer
+   becomes an availability dependency for Mode 2 senders.  If the Issuer
+   is unreachable, the agent MAY fall back to Mode 1 (Direct Hardware
+   Attestation) if its policy permits hardware fingerprint disclosure,
+   or MAY defer sending until the Issuer recovers.  The Issuer learns
+   that the agent is sending a message (and the timing thereof) but does
+   not learn the message content -- only the message-binding hash, which
+   is a SHA-256 digest from which content cannot be recovered.  Issuers
+   MUST NOT log message-binding hashes or correlate them with message
+   metadata beyond what is necessary for rate limiting and abuse
+   prevention.
+
+6.2.  Header Field Definition
+
+   Hardware-Trust-Proof = "Hardware-Trust-Proof" ":" SP
+                          sd-jwt-presentation CRLF
+
+   sd-jwt-presentation = sd-jwt "~" *( disclosure "~" )
+
+   ; sd-jwt and disclosure are defined in RFC 9901
+
+   The header value is an SD-JWT presentation as defined in [RFC9901],
+   consisting of the Issuer-signed JWT followed by zero or more
+   disclosures.  No Key Binding JWT (KB-JWT) is included; message
+   binding is provided by the nonce claim in the Issuer-signed payload
+   (see Section 6.3).
+
+   The SD-JWT payload MUST include the following claims:
+
+   iss  The Issuer's identifier (a URI matching the Issuer domain
+      derived from the agent's URN namespace).  Used to locate the
+      Issuer's signing key for signature verification.
+
+   iat  Issuance time as a NumericDate.  Because the SD-JWT is per-
+      message, iat reflects the time the Issuer signed this specific
+      token.
+
+   exp  Expiration time as a NumericDate.  MUST NOT exceed 600 seconds
+      (10 minutes) after iat.  This short validity window is appropriate
+      because the SD-JWT is per-message: the agent requests a fresh
+      token for each email, and the token need only remain valid long
+      enough for the message to traverse the sending mail
+      infrastructure.  Issuers SHOULD set exp to 300 seconds (5 minutes)
+      after iat for typical deployments.
+
+   nonce  A base64url-encoded message-binding digest that
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 27]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+      cryptographically ties this SD-JWT to a specific email.  Computed
+      as defined in Section 6.3.  This claim MUST be present and MUST
+      NOT be selectively disclosable.
+
+   _sd  Array of digests for selectively disclosable claims, as defined
+      in [RFC9901].
+
+   The following claims SHOULD be available for selective disclosure
+   (present as hashed entries in _sd):
+
+   trust_tier  The sender's hardware trust classification.  Values
+      include "sovereign" (genuine non-virtual hardware TPM), "portable"
+      (smart card / USB token), "enclave" (hardware enclave such as
+      Apple Secure Enclave), "virtual" (hypervisor-provided), and
+      "declared" (software-only).
+
+   sub  The sender's agent identity URN as defined in Section 4.1.
+
+   handle  A human-readable name for the sender, if assigned.
+
+   hw_manufacturer  The hardware manufacturer code (e.g., "INTC", "AMD",
+      "YBK").
+
+   enrolled_at  The timestamp at which the sender enrolled with the
+      Issuer.
+
+   operator_email  A contact address for the human operator responsible
+      for this agent.  Allows relying parties to reach the accountable
+      person without requiring the agent identity itself to be
+      disclosed.
+
+   hardware_locked  Boolean indicating whether the identity is
+      permanently bound to a single hardware device.  Once locked, the
+      agent can no longer add or migrate to new devices.  This is an
+      irreversible operation.
+
+   locked_at  Timestamp (ISO 8601) at which the hardware lock was
+      applied.  Present only when hardware_locked is true.
+
+   credential_pointer_count  Integer count of registered credential
+      pointers for this identity.  Allows a verifier to confirm that an
+      agent has external credentials on file without revealing the
+      credentials themselves.
+
+
+
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 28]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+6.3.  Message Binding via Issuer-Signed Nonce
+
+   Each Mode 2 SD-JWT is per-message: the Issuer signs a fresh token for
+   each email, incorporating a nonce claim that cryptographically binds
+   the token to the specific message being sent.  Because the Issuer
+   signs the token directly (rather than the agent signing a Key Binding
+   JWT with a key embedded in the token), no agent-specific
+   cryptographic material appears in the presentation.
+
+   The message-binding nonce is computed by the sending agent before
+   requesting the SD-JWT from the Issuer:
+
+     message-binding = h-hash || bh-raw || ts-bytes
+     nonce = base64url(SHA-256(message-binding))
+
+     h-hash   = SHA-256(canonicalized-headers)  ; 32 bytes
+     bh-raw   = SHA-256(canonicalized body)     ; 32 bytes
+     ts-bytes = big-endian uint64(iat)          ; 8 bytes
+
+   The agent proposes an iat value (its current time) when requesting
+   the token; the Issuer MUST reject proposed timestamps that differ
+   from the Issuer's clock by more than 60 seconds.  The accepted iat
+   becomes both the SD-JWT's iat claim and the timestamp used in ts-
+   bytes, ensuring sender and verifier agree on the value.
+
+   The canonicalized-headers are computed using the same rules as Mode 1
+   (see Section 5.2), but over a fixed set: exactly the headers From,
+   To, Subject, Date, and Message-ID, in that order, are canonicalized
+   per DKIM relaxed header canonicalization ([RFC6376] Section 3.4.2),
+   each terminated with CRLF, then the Hardware-Trust-Proof header
+   itself is appended last (canonicalized the same way, with its value
+   replaced by the empty string, without a trailing CRLF).  The value is
+   blanked because the SD-JWT token has not yet been obtained at the
+   time the nonce is computed (the nonce is an input to the Issuer,
+   which returns the SD-JWT that will become the header value); the
+   header name and field separator are retained so that the choice of
+   header is bound to the nonce.  This is the same self-inclusion
+   technique used by DKIM-Signature ([RFC6376] Section 3.7) and by Mode
+   1 (see Section 5.2).
+
+   The covered header set is fixed at exactly these five, in this order,
+   so that sender and verifier require no negotiation: unlike Mode 1, a
+   Mode 2 header carries no explicit list of covered headers, so any
+   variation would make the verifier unable to reconstruct the nonce
+   input and would fail legitimate messages.  A future version MAY add a
+   non-selectively-disclosable claim enumerating additional covered
+   headers; a sender needing flexible header coverage today uses Mode 1,
+   whose h= parameter carries the list explicitly.
+
+
+
+Drake                    Expires 18 January 2027               [Page 29]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   The agent submits the computed nonce and proposed iat to the Issuer
+   over an authenticated channel (e.g., TLS client certificate
+   authentication using the agent's hardware-resident key, or an OAuth2
+   token obtained during enrollment).  The Issuer verifies that the
+   requesting agent is currently enrolled with valid hardware and has
+   not been revoked, then creates and signs an SD-JWT containing the
+   nonce along with selectively disclosable claims about the agent.  The
+   Issuer returns the signed SD-JWT and the disclosure values for all
+   selectively disclosable claims.  The agent selects which disclosures
+   to include in the presentation.
+
+   Because the nonce is embedded in the Issuer-signed payload, any
+   modification to the email headers or body after the token is issued
+   causes the nonce to mismatch during verification.  Because the
+   Hardware-Trust-Proof header is included in the canonicalized-headers
+   (with its value blanked during nonce computation), the choice of
+   disclosed claims is also bound to the message.
+
+   The Issuer's signature on the nonce serves a dual purpose: it proves
+   that a currently enrolled agent with verified hardware requested this
+   specific message binding, and it asserts the Issuer's claims about
+   the agent's trust classification.  No agent-specific key appears in
+   the token, so recipients cannot link multiple emails to the same
+   sender based on the Mode 2 header alone.
+
+6.4.  Verification Algorithm
+
+   1.  Parse the Hardware-Trust-Proof header as an SD-JWT presentation
+       per [RFC9901].  The presentation consists of the Issuer-signed
+       JWT and zero or more disclosures; no Key Binding JWT is expected.
+
+   2.  Extract the issuer (iss) claim from the SD-JWT payload.
+
+   3.  Obtain the Issuer's public key.  The verifier MUST first check
+       for a DNS-published key (see Section 4.5.1).  If no DNS record is
+       found, the verifier MAY fall back to the Issuer's HTTPS JWKS
+       endpoint (e.g., {iss}/.well-known/jwks.json).  Cached keys SHOULD
+       have a TTL of at least 1 hour and at most 24 hours.
+
+   4.  Verify the SD-JWT signature against the Issuer's public key per
+       [RFC9901].
+
+   5.  Verify that exp has not passed and iat is within an acceptable
+       window.  Because Mode 2 SD-JWTs are per-message, the RECOMMENDED
+       exp is 300 seconds after iat; verifiers SHOULD reject tokens
+       where the Issuer-set exp exceeds iat by more than 600 seconds
+       (indicating a misconfigured Issuer).  However, the verifier's
+       freshness check against real-world clock time should accommodate
+
+
+
+Drake                    Expires 18 January 2027               [Page 30]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+       delivery delays: if the SD-JWT signature is valid and the iat-to-
+       exp span is reasonable but the current time exceeds exp due to
+       greylisting or queue delays, the verifier SHOULD treat the result
+       as "pass" with an informational timestamp-age note rather than a
+       hard "fail" (see the corresponding guidance for Mode 1 timestamp
+       validation in Section 5.3).
+
+   6.  For each disclosure present, verify that its hash matches an
+       entry in the _sd array.
+
+   7.  Verify the message binding.  Extract the nonce claim from the SD-
+       JWT payload.  If absent, the result is "fail" (missing message
+       binding).  Recompute the expected message-binding digest as
+       defined in Section 6.3: canonicalize exactly the email headers
+       From, To, Subject, Date, and Message-ID, in that order, and the
+       body, compute message-binding = h-hash || bh-raw || ts-bytes
+       (using the SD-JWT's iat for ts-bytes), then base64url(SHA-
+       256(message-binding)).  Compare the result with the nonce claim
+       value.  If they differ, the result is "fail" (message binding
+       mismatch).
+
+   8.  Extract the disclosed claims.  The result is "pass" with the set
+       of verified claims.
+
+6.5.  Authentication-Results Integration
+
+   Authentication-Results: mx.example.com;
+     hw-trust=pass
+       header.trust_tier=sovereign
+       header.issuer=1id.com
+
+   hw-trust  The method identifier.  Result values are the same as for
+      hw-attest.
+
+   header.trust_tier  The disclosed trust tier value, if the sender
+      chose to reveal it.
+
+   header.issuer  The Issuer domain (derived from the iss claim).  This
+      property is named issuer, not registry, because in the companion
+      architecture ([I-D.drake-agent-identity-registry]) "Registry"
+      denotes the distinct Registry Operator role; the party that issues
+      the trust proof is the Issuer (Registrar).
+
+7.  Combined Mode
+
+   A sending agent MAY include both Hardware-Attestation and Hardware-
+   Trust-Proof headers in the same message.  When both are present:
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 31]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   *  Receivers that trust hardware manufacturer CAs but not the Issuer
+      SHOULD verify Hardware-Attestation and ignore Hardware-Trust-
+      Proof.
+
+   *  Receivers that trust the Issuer but prefer not to process the full
+      certificate chain SHOULD verify Hardware-Trust-Proof and MAY
+      ignore Hardware-Attestation.
+
+   *  Receivers that support both SHOULD verify both and record both
+      results in Authentication-Results.  Agreement between the two
+      mechanisms provides defense-in-depth: compromising either the
+      manufacturer CA or the Issuer alone is insufficient to forge both
+      attestations.
+
+   The two mechanisms are independent.  Failure of one MUST NOT cause
+   the other to be treated as failed.
+
+8.  Sybil Resistance Properties
+
+   The primary security goal of this specification is Sybil resistance:
+   at the hardware-anchored tiers, creating many sender identities costs
+   many physical devices.
+
+8.1.  Direct Hardware Attestation (Mode 1)
+
+   Each hardware security component contains exactly one identity key,
+   which produces exactly one identity certificate.  The hardware
+   fingerprint (identity certificate public key hash) provides the
+   underlying Sybil resistance: creating N identities requires N
+   physical devices.
+
+   The agent identity URN (aid) is the RECOMMENDED primary key for
+   reputation tracking.  When aid is present, verifiers SHOULD build
+   reputation against the aid rather than the hardware fingerprint,
+   because the aid persists across hardware migrations (see
+   Section 4.2).  The hardware fingerprint serves as a secondary signal
+   that anchors the identity to physical hardware and enables reputation
+   tracking for agents that do not present an aid.
+
+   A receiving mail server that tracks agent identities (or, when aid is
+   absent, hardware fingerprints) can enforce policies such as:
+
+   *  Rate limiting per agent identity
+
+   *  Reputation scoring per agent identity
+
+   *  Blocking agent identities associated with abuse
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 32]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   An attacker attempting to evade these policies requires a new
+   physical hardware security component (minimum cost: the device itself
+   at ~$20 plus potentially a host machine at ~$200-2000), compared to
+   zero cost for creating a new software identity.
+
+   Multiple agents sharing the same hardware (e.g., multiple VMs on a
+   server with a single TPM) share the same hardware fingerprint and
+   therefore linked reputations.  This shared fate model creates
+   economic incentive for infrastructure operators to police their
+   tenants: if one agent on a machine misbehaves, all agents on that
+   machine inherit the reputational consequences.
+
+8.2.  SD-JWT Trust Proof (Mode 2)
+
+   Sybil resistance in Mode 2 depends on the Issuer's enrollment policy.
+   An Issuer that assigns trust_tier values indicating hardware
+   verification (e.g., "sovereign") MUST verify hardware attestation at
+   enrollment time and MUST enforce the cardinality constraints defined
+   in Section 4.2: at most one agent identity per hardware device within
+   that Issuer's namespace, while permitting hardware migration
+   (multiple devices backing the same identity over time).  Such an
+   Issuer provides equivalent Sybil resistance to Mode 1, with the
+   additional benefit that the hardware fingerprint is not revealed to
+   email recipients.
+
+   Issuers SHOULD monitor for anomalous enrollment patterns (e.g., many
+   enrollments from a single IP range or a sudden spike in enrollments
+   from a specific manufacturer CA) and SHOULD be capable of suspending
+   enrollments pending investigation.
+
+   An Issuer that enrolls software-only agents (trust_tier "declared")
+   provides no hardware-based Sybil resistance and MUST NOT assign
+   trust_tier values that imply hardware verification.  The trust_tier
+   claim distinguishes these cases, enabling recipients to weight trust
+   appropriately.
+
+8.3.  Virtual Hardware
+
+   Virtual TPMs (vTPMs) provided by hypervisors (e.g., VMware, Hyper-V,
+   QEMU, ...) have valid identity certificates signed by the hypervisor
+   vendor's CA, but the hypervisor operator can instantiate arbitrary
+   numbers of vTPMs.  Virtual TPMs therefore provide no hardware-based
+   Sybil resistance against the hypervisor operator.  They do, however,
+   provide benefits over software-only keys (typ=SFT):
+
+   *  Key persistence managed by the hypervisor (the agent does not need
+      to store key material).
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 33]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   *  Modest cost barriers (provisioning a vTPM is slower and more
+      resource-intensive than generating a software key pair).
+
+   *  Reputation accumulation incentive (discarding a vTPM identity
+      forfeits its accumulated reputation).
+
+   Receiving mail servers MUST distinguish between physical and virtual
+   hardware.  The identity certificate's issuer field identifies the
+   manufacturer: VMware-issued or Microsoft Hyper-V-issued certificates
+   indicate a virtual TPM.  The header.tier property in Authentication-
+   Results ("sovereign" vs "virtual") and the typ parameter ("TPM" vs
+   "VRT") communicate this distinction.
+
+   Mail servers SHOULD apply significantly different reputation
+   thresholds for virtual vs. physical hardware.  For high-trust
+   scenarios, verifiers MAY reject virtual TPM attestation entirely and
+   require physical hardware (typ=TPM or typ=PIV).
+
+9.  Interaction with Existing Email Authentication
+
+   The mechanisms defined in this document complement rather than
+   replace existing email authentication:
+
+   SPF [RFC7208]  Verifies the sending IP is authorized for the domain.
+      Orthogonal to hardware attestation.  Both SHOULD be used.
+
+   DKIM [RFC6376]  Provides domain-level signing.  Hardware-Attestation
+      provides device-level signing.  They protect different properties:
+      DKIM proves domain authorization; Hardware-Attestation proves
+      hardware identity.  Both SHOULD be used.
+
+   DMARC [RFC7489]  Ties SPF and DKIM together with policy.  A future
+      extension to DMARC could incorporate hardware attestation results
+      into the policy evaluation.  This is out of scope for this
+      document.
+
+   ARC [RFC8617]  Preserves authentication results through forwarding
+      chains.  ARC SHOULD preserve Hardware-Attestation and Hardware-
+      Trust-Proof Authentication-Results when forwarding messages.
+
+   S/MIME [RFC8551]  Provides end-to-end encryption and sender signing
+
+
+
+
+
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 34]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+      via CA-issued certificates.  S/MIME and Hardware-Attestation
+      operate at different layers and coexist without interference: S/
+      MIME wraps or signs the message body within MIME structures, while
+      Hardware-Attestation adds a header field alongside the message.
+      The body hash (bh) in the Hardware-Attestation header is computed
+      over the raw canonicalized body, including any S/MIME MIME
+      structures.  A message MAY carry both S/MIME signatures and
+      hardware attestation simultaneously.
+
+   OpenPGP / PGP/MIME [RFC3156]  Like S/MIME, OpenPGP operates at the
+      body level (encrypting or signing the message content within MIME
+      structures).  Hardware-Attestation operates at the header level.
+      The two mechanisms are fully orthogonal: a PGP-signed message can
+      carry a Hardware-Attestation header, and the verifier processes
+      each independently.
+
+9.1.  Multiple Headers and Forwarding
+
+   If multiple Hardware-Attestation headers are present in a message
+   (e.g., if a forwarding gateway adds its own attestation), the
+   verifier SHOULD evaluate all of them independently and record each
+   result separately in Authentication-Results, using the same
+   precedence conventions as for multiple DKIM-Signature headers
+   [RFC6376].
+
+   Mailing lists and content-modifying forwarders that alter the message
+   body will invalidate the body hash (bh) in any existing Hardware-
+   Attestation header.  This is expected and analogous to DKIM signature
+   breakage through body modification.  Such intermediaries SHOULD
+   preserve the original Hardware-Attestation header (the verifier will
+   record "fail" due to body hash mismatch) and MAY add their own
+   Hardware-Attestation header covering the modified body, if the
+   intermediary itself has hardware attestation capability.  ARC
+   [RFC8617] SHOULD be used to preserve the original authentication
+   results from before the modification.
+
+9.2.  Handle Display in Email
+
+   When a sending agent has a registered handle (as defined in the
+   companion registry specification
+   [I-D.drake-agent-identity-registry]), the From header display name
+   SHOULD be the agent's handle.  This makes agent identity visible to
+   human recipients without requiring them to interpret URNs or hardware
+   fingerprints.
+
+   For example, an agent with handle "crusty" in the "global" namespace
+   would send with:
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 35]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   From: crusty.global <agent-a7f3c2e9@agents.example.com>
+
+   The URN remains the authoritative identifier and appears in the
+   Hardware-Attestation header's aid parameter.  The From display name
+   is a human convenience that SHOULD match the handle when one is
+   registered.
+
+   Mail systems that provision mailbox addresses for agents SHOULD
+   likewise use the handle as the address local part (e.g.,
+   crusty@agents.example.com) where local-part syntax and uniqueness
+   permit.  Operators purchase handles to enjoy the use of their chosen
+   name, and handle revenue funds the shared-namespace registry
+   ([I-D.drake-agent-identity-registry]) that keeps base identity
+   issuance free; using the handle wherever a name is needed honors
+   both.
+
+10.  Message Submission Requirements
+
+   The attestation signature in the Hardware-Attestation header is
+   produced by the sending agent, not by the mail server.  When the aid
+   parameter is present, it is cryptographically bound to the signature
+   (see Section 5.2), so any modification of the aid after signing
+   causes verification to fail at the receiving end.  As defense-in-
+   depth, Mail Submission Agents (MSAs) that accept messages from
+   hardware-attested senders MUST also enforce identity binding at
+   submission time, rejecting messages before they enter the mail system
+   rather than relying solely on receiver-side verification.
+
+   Agents submitting messages through an attestation-aware MSA MUST
+   authenticate to the MSA.  The MSA SHOULD support authentication using
+   the agent's hardware-resident key (e.g., TLS client certificate
+   authentication where the client certificate is signed by the same AK
+   used for attestation, or a challenge-response protocol using the TPM
+   or PIV signing key).  This ensures that the MSA can verify the
+   submitting agent controls the hardware corresponding to the
+   attestation header, preventing credential-theft scenarios where SMTP
+   credentials are compromised but the hardware is not.
+
+10.1.  Agent Identity Binding at Submission
+
+   When an MSA receives a message containing a Hardware-Attestation
+   header with an aid (agent identity) parameter, the MSA MUST verify
+   that the aid value corresponds to the authenticated account
+   submitting the message.  The binding between authenticated account
+   and permitted agent identity URN(s) is established during account
+   provisioning and is outside the scope of this specification, but the
+   enforcement is normative:
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 36]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   *  If the aid value does not match any agent identity URN authorized
+      for the submitting account, the MSA MUST reject the message with
+      an appropriate error (e.g., SMTP 550 "5.7.1 Agent identity not
+      authorized for this account").
+
+   *  If the Hardware-Attestation header is present but contains no aid
+      parameter, the MSA SHOULD still verify that the hardware
+      fingerprint (derived from the chain parameter) corresponds to
+      hardware registered to the submitting account, if such a registry
+      is available.
+
+   *  If the MSA does not implement hardware attestation verification,
+      it MUST NOT strip or modify the Hardware-Attestation header.  The
+      header will be evaluated by downstream verifiers.
+
+   This requirement parallels the existing SMTP AUTH obligation: just as
+   an MSA enforces that the envelope sender (MAIL FROM) and header From
+   address belong to the authenticated user, an attestation-aware MSA
+   enforces that the agent identity belongs to the authenticated agent.
+
+10.2.  Hardware Fingerprint Binding at Submission
+
+   For Mode 1 (Direct Hardware Attestation), the MSA SHOULD extract the
+   hardware fingerprint from the attestation chain and verify it against
+   the fingerprint registered to the submitting account.  This prevents
+   an attacker who has obtained valid SMTP credentials from substituting
+   a different device's attestation evidence.
+
+   For Mode 2 (SD-JWT Trust Proof), the MSA SHOULD verify that the
+   Issuer (iss claim) and, if disclosed, the agent identity URN (sub
+   claim) are consistent with the submitting account's registered
+   identity.
+
+10.3.  Messages Without Attestation
+
+   An MSA that serves hardware-attested agents MAY also accept messages
+   without Hardware-Attestation or Hardware-Trust-Proof headers, subject
+   to its own policy.  The absence of attestation headers from a known-
+   attested account SHOULD be logged as anomalous but MUST NOT cause
+   message rejection unless the account's policy explicitly requires
+   attestation on every message.
+
+
+
+
+
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 37]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+10.4.  Duplicate Header Rejection
+
+   An MSA MUST reject any submitted message that contains more than one
+   Hardware-Attestation header field.  A legitimate sender produces
+   exactly one attestation per message.  Multiple Hardware-Attestation
+   headers in a submitted (non-forwarded) message indicate either a
+   software defect or an injection attempt.  This check MUST occur
+   before DKIM signing, so that the MSA never signs a message containing
+   duplicate attestation headers.
+
+10.5.  Timestamp Validation at Submission
+
+   The MSA SHOULD verify that the ts value in the Hardware-Attestation
+   header is within a reasonable window of the current time
+   (RECOMMENDED: 60 seconds).  A timestamp significantly in the past may
+   indicate a replayed header; a timestamp in the future may indicate
+   clock manipulation intended to extend the attestation's apparent
+   validity.  If the timestamp is outside the acceptable window, the MSA
+   SHOULD reject the message.
+
+11.  Interoperability Considerations
+
+11.1.  Backward Compatibility
+
+   This specification introduces new email headers that are ignored by
+   mail servers that do not implement it.  Messages carrying Hardware-
+   Attestation or Hardware-Trust-Proof headers are fully compatible with
+   legacy mail infrastructure: the headers are simply unrecognized and
+   have no effect on delivery.  This ensures that deployment can proceed
+   incrementally without disrupting existing email flows.
+
+11.2.  DKIM Coverage of Attestation Headers
+
+   Because the sending agent adds the Hardware-Attestation and Hardware-
+   Trust-Proof headers before submitting the message to the MSA, DKIM
+   signing (which occurs at the MSA or a downstream MTA) naturally
+   occurs after these headers are present.  The DKIM signer SHOULD
+   include Hardware-Attestation and Hardware-Trust-Proof in the DKIM-
+   Signature h= tag so that the DKIM signature protects the attestation
+   evidence against modification in transit.  This allows a verifier to
+   confirm that the domain owner's mail infrastructure accepted the
+   attestation header as submitted by the agent.
+
+
+
+
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 38]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+11.3.  Header Size Considerations
+
+   The base64-encoded CMS chain in Mode 1 can be several kilobytes,
+   depending on the number of intermediate CA certificates.
+   Implementations SHOULD use line folding per [RFC5322] to keep
+   individual header lines within the 998-octet limit.  Mail servers
+   that impose maximum header size limits SHOULD allow at least 8192
+   octets for the Hardware-Attestation header value.
+
+12.  Implementation Status
+
+   NOTE TO RFC EDITOR: Please remove this section before publication.
+
+   This section records the status of known implementations of the
+   protocol defined by this specification at the time of posting of this
+   Internet-Draft, and is based on a proposal described in [RFC7942].
+
+12.1.  1id.com Issuer
+
+   Organization: 1id.com (https://1id.com)
+
+   Description: An implementation of both Mode 1 (Direct Hardware
+   Attestation) and Mode 2 (SD-JWT Trust Proof) as described in this
+   draft.  The implementation includes server-side identity certificate
+   chain validation against manufacturer root CAs (Intel, AMD, Infineon,
+   STMicroelectronics, Nuvoton, Qualcomm, Yubico), anti-Sybil
+   enforcement via a one-device-per-identity registry, and SD-JWT trust
+   proof issuance with selective disclosure of nine claims (sub, handle,
+   trust_tier, hw_manufacturer, enrolled_at, operator_email,
+   hardware_locked, locked_at, credential_pointer_count).  The system
+   supports both TPM-based and PIV-based (YubiKey) attestation,
+   including co-location binding ceremonies.  The deployed
+   implementation currently issues identifiers under the -02-era syntax
+   (urn:aid:com.1id:); migration to the current format, with re-minting
+   of all pre-launch identities, is planned.
+
+   Maturity: Beta.  Deployed in production at https://1id.com.
+
+   Coverage: Both Mode 1 (Direct Hardware Attestation via CMS
+   SignedData) and Mode 2 (SD-JWT Trust Proof) are implemented for TPM-
+   backed identities (sovereign and virtual tiers) and for Apple Secure
+   Enclave (enclave tier).  Mode 2 is additionally implemented for PIV/
+   YubiKey (portable tier) and declared (software-only) tiers.  For
+   honesty of claims: every production Mode 1 chain to date is Issuer-
+   certified (the Issuer validates the manufacturer EK chain at
+   enrollment, then issues the AK certificate); a deployment exercising
+   the fully Issuer-independent path -- a verifier trusting only
+   manufacturer root CAs, with the full manufacturer chain carried in
+
+
+
+Drake                    Expires 18 January 2027               [Page 39]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   the header -- has not yet been demonstrated end-to-end and is sought
+   from independent implementers.  Dynamic trust tiering is supported:
+   the same identity produces different trust_tier claims depending on
+   which device is used for authentication.  Features include transient-
+   only AK model for TPM attestation with no NV storage writes, multi-
+   device identity management with hardware lock, and per-message SD-JWT
+   issuance.  Live email examples from this implementation -- all
+   independently verifiable using the hw-attest-verify tool -- are
+   included in Appendix B.
+
+   Contact: Christopher Drake <cnd@1id.com>
+
+   Open-source components:
+
+   *  *Python SDK:* https://github.com/1id-com/oneid-sdk -- Client-side
+      enrollment and attestation library.  Published to PyPI as "oneid".
+
+   *  *Node.js SDK:* https://github.com/1id-com/oneid-node -- Client-
+      side enrollment and attestation library.  Published to npm as
+      "1id".
+
+   *  *Hardware helper binary:* https://github.com/1id-com/oneid-enroll
+      -- Cross-platform Go binary for TPM access (Windows TBS, Linux
+      /dev/tpmrm0), PIV smart card operations, and AK provisioning.
+
+   *  *Internet-Draft companion repository:* https://github.com/1id-com/
+      draft-drake-email-hardware-attestation -- Draft XML source,
+      example verification code for both modes, and test vectors.
+
+   *  *Manufacturer CA Trust Store:* https://github.com/1id-com/tpm-
+      manufacturer-cas -- Community-curated collection of hardware
+      manufacturer root CA certificates for identity certificate chain
+      validation, as referenced in Appendix A.
+
+12.2.  MailPal.com Verifier and Relay
+
+   Organization: 1id.com (https://mailpal.com)
+
+   Description: An email service (Stalwart Mail Server on Linux)
+   intended to implement end-to-end hardware attestation for both
+   sending and receiving.  Planned capabilities include: on the outbound
+   path, MSA validation of Hardware-Attestation and Hardware-Trust-Proof
+   headers at submission time per Section 10, agent identity binding
+   enforcement, and attestation header inclusion in DKIM signature
+   coverage.  On the inbound path, verification of both Mode 1
+   certificate chains and Mode 2 SD-JWT trust proofs, Authentication-
+   Results recording per Section 5.4 and Section 6.5, and trust-tier-
+   differentiated delivery policy.
+
+
+
+Drake                    Expires 18 January 2027               [Page 40]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   Maturity: Alpha.  Mail infrastructure deployed at
+   https://mailpal.com; inbound attestation header verification
+   implemented via milter integration.
+
+   Coverage: Mail transport infrastructure is operational.  Inbound
+   verification of both Mode 1 (CMS certificate chain) and Mode 2 (SD-
+   JWT trust proof) headers is implemented via a pure-Python milter
+   daemon that adds Authentication-Results headers per Section 5.4 and
+   Section 6.5.  All five trust tiers (sovereign, portable, enclave,
+   virtual, declared) are verified in production.  The Authentication-
+   Results headers embedded in the examples in Appendix B were generated
+   by this milter during live SMTP reception.  Attestation header
+   generation at submission time is in development.
+
+   Contact: Christopher Drake <cnd@1id.com>
+
+   Open-source components:
+
+   *  *Attestation verification library and CLI:*
+      https://github.com/1id-com/hw-attest-verify -- Verification of
+      Mode 1 CMS attestation bundles and Mode 2 SD-JWT trust proofs.
+      Published to PyPI as "hw-attest-verify" (pip install hw-attest-
+      verify).  Includes a command-line tool for verifying .eml files
+      and a library suitable for integration into any MTA or mail
+      filter.  Used to verify the live examples in Appendix B.
+
+13.  IANA Considerations
+
+13.1.  Header Field Registration
+
+   IANA is requested to register the following header fields in the
+   "Permanent Message Header Field Names" registry:
+
+   Hardware-Attestation  Applicable protocol: mail.  Status:
+      experimental.  Reference: this document, Section 5.2.
+
+   Hardware-Trust-Proof  Applicable protocol: mail.  Status:
+      experimental.  Reference: this document, Section 6.2.
+
+13.2.  Authentication Method Registration
+
+   IANA is requested to register the following entries in the "Email
+   Authentication Methods" registry [RFC8601]:
+
+   Method: hw-attest.  Definition: this document, Section 5.4.  ptype:
+   header.  Properties:
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 41]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+     +==========+============+=======================================+
+     | Property | Value Type | Description                           |
+     +==========+============+=======================================+
+     | typ      | token      | Hardware attestation mechanism type   |
+     |          |            | (TPM, PIV, ENC, VRT, SFT)             |
+     +----------+------------+---------------------------------------+
+     | alg      | token      | Signature algorithm (RS256, ES256,    |
+     |          |            | PS256)                                |
+     +----------+------------+---------------------------------------+
+     | mfr      | token      | Manufacturer code from identity       |
+     |          |            | certificate                           |
+     +----------+------------+---------------------------------------+
+     | tier     | token      | Inferred trust tier (sovereign,       |
+     |          |            | portable, enclave, virtual, declared) |
+     +----------+------------+---------------------------------------+
+     | fp       | value      | Truncated SHA-256 fingerprint of      |
+     |          |            | identity certificate public key       |
+     +----------+------------+---------------------------------------+
+     | aid      | value      | Agent identity URN, if present        |
+     +----------+------------+---------------------------------------+
+
+                                  Table 2
+
+   Result values: "pass" (all checks succeeded), "fail" (cryptographic
+   verification failed), "none" (header absent or unparseable),
+   "temperror" (transient verification error, e.g., DNS timeout),
+   "permerror" (permanent verification error, e.g., unsupported
+   version).
+
+   Method: hw-trust.  Definition: this document, Section 6.5.  ptype:
+   header.  Properties:
+
+         +============+============+=============================+
+         | Property   | Value Type | Description                 |
+         +============+============+=============================+
+         | trust_tier | token      | Disclosed trust tier value, |
+         |            |            | if revealed by the sender   |
+         +------------+------------+-----------------------------+
+         | issuer     | value      | Issuer domain (derived from |
+         |            |            | the iss claim)              |
+         +------------+------------+-----------------------------+
+
+                                  Table 3
+
+   Result values: "pass", "fail", "none", "temperror", "permerror" (same
+   semantics as hw-attest).
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 42]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+13.3.  Hardware Attestation Type Registry
+
+   IANA is requested to create a new registry titled "Hardware
+   Attestation Type Values" with the following initial entries.  New
+   entries require Specification Required ([RFC8126]).  The designated
+   expert(s) should be selected from the hardware security and email
+   authentication communities and should verify that proposed values
+   correspond to a distinct class of hardware security mechanism with
+   attestation capabilities not adequately covered by existing entries.
+
+        +=======+================================+===============+
+        | Value | Description                    | Reference     |
+        +=======+================================+===============+
+        | TPM   | TPM 2.0 (discrete or firmware) | this document |
+        +-------+--------------------------------+---------------+
+        | PIV   | PIV smart card / USB token     | this document |
+        +-------+--------------------------------+---------------+
+        | ENC   | Hardware enclave (e.g., Apple  | this document |
+        |       | Secure Enclave)                |               |
+        +-------+--------------------------------+---------------+
+        | VRT   | Virtual TPM (hypervisor-       | this document |
+        |       | provided)                      |               |
+        +-------+--------------------------------+---------------+
+        | SFT   | Software-managed key           | this document |
+        +-------+--------------------------------+---------------+
+
+                                 Table 4
+
+13.4.  Underscored DNS Node Name Registration
+
+   IANA is requested to register the following entry in the "Underscored
+   and Globally Scoped DNS Node Names" registry ([RFC8552]):
+
+   _hwattest  RR Type: TXT.  Reference: this document, Section 4.5.1.
+
+13.5.  URN Namespace Registration
+
+   The "aid" URN namespace is registered by
+   [I-D.drake-agent-identity-registry], which is the sole registration
+   request for that namespace.  Earlier revisions of this document
+   carried a duplicate registration template; it is withdrawn in this
+   revision, and this document has no URN-related IANA actions.
+
+14.  Security Considerations
+
+
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 43]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+14.1.  Manufacturer CA Compromise
+
+   If a hardware manufacturer's root CA private key is compromised, an
+   attacker could forge identity certificates and create unlimited fake
+   hardware identities.  This risk is inherent to any PKI-based system
+   and is mitigated by the same measures that protect manufacturer CAs
+   today: hardware security modules, air-gapped signing ceremonies, and
+   Certificate Transparency [RFC9162].
+
+   The SD-JWT Trust Proof (Mode 2) provides partial mitigation: if the
+   Issuer detects anomalous enrollment patterns (e.g., thousands of
+   enrollments from a single manufacturer CA in a short period), it can
+   suspend enrollments while the compromise is investigated.
+
+14.2.  Revocation and Compromise Response
+
+   This specification does not define a real-time certificate revocation
+   protocol.  Compromise of individual hardware devices or keys is
+   handled at multiple layers:
+
+   Compromised or stolen device (TPM, YubiKey)  The device owner
+      notifies their Issuer, which revokes the agent identity.  The
+      Issuer publishes revocation status via its JWKS or a revocation
+      endpoint; verifiers that cache Issuer metadata will detect the
+      revocation at the next refresh.  For Mode 1, the hardware
+      fingerprint SHOULD be added to a local blocklist.  The device's
+      reputation history (which now includes the abuse) persists and
+      follows the hardware fingerprint even if re-enrolled under a new
+      identity.
+
+   Manufacturer CA breach  Verifiers MUST remove the compromised CA from
+      their trust store.  The IANA Hardware Attestation Type registry
+      (see Section 13) and the community-maintained manufacturer CA
+      trust store (see Appendix A) provide distribution channels for
+      updated trust anchors.
+
+   Rogue Issuer  Verifiers remove the Issuer from their allowlist.
+      Because Issuer trust is a local policy decision (see
+      Section 14.12), no central revocation mechanism is required: each
+      verifier independently decides which Issuers to trust, analogous
+      to browser root store management for TLS CAs.
+
+   The absence of a real-time revocation check (such as OCSP) is a
+   deliberate trade-off: adding a synchronous revocation check to the
+   email delivery path would introduce latency and a new availability
+   dependency.  The short validity window for SD-JWT trust proofs (600
+   seconds) and the per-message timestamp in Mode 1 limit the exposure
+   window for compromised credentials.
+
+
+
+Drake                    Expires 18 January 2027               [Page 44]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+14.3.  Replay Attacks
+
+   The timestamp (ts) in the Hardware-Attestation header limits the
+   replay window.  Receiving mail servers SHOULD reject attestations
+   with timestamps more than 300 seconds from the current time for
+   direct SMTP delivery, and up to 3600 seconds for messages with
+   evidence of intermediate relay hops.  Additionally, the body hash
+   (bh) binds the attestation to a specific email body, preventing a
+   valid attestation from being attached to a different message.
+
+   For SD-JWT Trust Proofs, each SD-JWT is per-message: the nonce claim
+   in the Issuer-signed payload binds the token to the specific email's
+   headers and body, and the short validity window (RECOMMENDED 300
+   seconds) limits the replay window.  An attacker who intercepts a
+   valid SD-JWT cannot reuse it for a different message because the
+   nonce will not match.
+
+14.4.  Compromised Endpoints
+
+   This specification does not prevent a compromised device from sending
+   attested email -- if an attacker has full control of a device with
+   hardware security, they can use that hardware to attest.  However,
+   this is by design: each compromised device contributes exactly one
+   hardware identity, and that identity accrues reputation (good or bad)
+   permanently.  A botnet of 10,000 compromised devices yields 10,000
+   attestable identities, not the millions possible with software-only
+   identity systems.
+
+   The transient key model (Section 4.4) reduces the privilege
+   requirements for per-message signing.  Initial enrollment (the one-
+   time MakeCredential / ActivateCredential exchange) typically requires
+   elevated operating system privileges (administrator on Windows via
+   the TPM Base Services API, or root on Linux via /dev/tpmrm0).
+   Subsequent signing operations (TPM2_Sign with the transient AK) MAY
+   be available to unprivileged processes depending on the operating
+   system configuration.  On Windows, a one-time registry configuration
+   can grant non-administrator processes access to TPM signing
+   operations.
+
+   The net effect is that hardware attestation raises the bar for email
+   abuse from "any script" to "compromise of a specific physical
+   device," which is a substantial improvement over the status quo even
+   if it is not a complete solution.
+
+
+
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 45]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+14.5.  Physical Attacks on Hardware Security Components
+
+   Extracting private keys from a TPM or PIV token requires physical
+   attacks such as electron microscopy, laser fault injection, or side-
+   channel analysis.  Modern security components include countermeasures
+   against these attacks.  The cost and expertise required for
+   successful key extraction is estimated at $50,000-$200,000 per chip,
+   making it economically unviable for spam operations.
+
+   Even if key extraction were feasible, the extracted key could only
+   impersonate one hardware identity.  The attacker would still need to
+   extract keys from additional devices to create additional identities.
+
+14.6.  Virtual Hardware Risk
+
+   Virtual TPMs do not provide the same Sybil resistance as physical
+   hardware; see Section 8.3 for the detailed analysis and policy
+   guidance.
+
+14.7.  Software-Only Attestation Risk
+
+   Software-managed keys (typ=SFT) provide no hardware-based Sybil
+   resistance; an attacker can generate unlimited key pairs at zero
+   cost.  Verifiers MUST treat software-only attestation (trust_tier
+   "declared") as fundamentally weaker than hardware-backed attestation.
+   Software-only attestation exists to enable inclusive participation,
+   not to provide Sybil resistance (see Section 1.1).
+
+14.8.  Transient Object Slot Limits
+
+   TPMs have a limited number of transient object slots (typically 3 to
+   7 simultaneously loaded objects).  If all slots are occupied,
+   TPM2_CreatePrimary returns TPM_RC_OBJECT_MEMORY (0x0902).
+   Implementations MUST handle this error by flushing unused transient
+   handles (TPM2_FlushContext) and retrying.  Failure to flush transient
+   objects can cause denial of service to other TPM-using applications
+   on the same device.
+
+14.9.  Policy Abuse and Deanonymization Risk
+
+   This specification targets AI agents, bots, and autonomous systems
+   (see Section 3).  It is not intended for individual human senders and
+   is not expected to be incorporated into Mail User Agents (MUAs)
+   designed for interactive human use.  The privacy trade-offs inherent
+   in hardware attestation -- particularly the persistent hardware
+   fingerprint exposed by Mode 1 -- are acceptable for automated senders
+   whose identity is operationally transparent, but disproportionate for
+   human correspondence.
+
+
+
+Drake                    Expires 18 January 2027               [Page 46]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   However, an AI agent may compose and send email on behalf of an
+   individual (e.g., an executive assistant agent sending calendar
+   invitations, or a customer service agent responding to support
+   tickets).  In such delegated-sending scenarios, the attestation
+   identifies the agent and its hardware, not the human principal.
+   Operators deploying agents that send on behalf of individuals SHOULD
+   be aware that the persistent hardware fingerprint (Mode 1) or the
+   Issuer identifier (Mode 2) may allow recipients to correlate messages
+   across different human principals served by the same agent.  Where
+   this correlation is undesirable, operators SHOULD use Mode 2 without
+   disclosing the agent identity URN, or SHOULD deploy separate agent
+   identities per human principal.
+
+   The persistent hardware fingerprint exposed by Mode 1 (see
+   Section 15.2 for linkability details) creates specific abuse
+   scenarios even in automated contexts:
+
+   *  Authoritarian regimes could correlate hardware fingerprints across
+      messages to identify the organizations operating specific agents.
+
+   *  Platforms could mandate Mode 1 attestation to deanonymize agents
+      that have legitimate reasons for pseudonymity (e.g.,
+      whistleblower-support bots, journalist-source-protection agents).
+
+   *  Receiving mail servers that log hardware fingerprints create long-
+      lived tracking databases linking agent activity across recipients
+      and time periods.
+
+   Mode 2 (SD-JWT Trust Proof) mitigates these risks by eliminating
+   persistent agent-specific identifiers from the token; see
+   Section 15.3.  Receiving mail servers SHOULD NOT require Mode 1
+   attestation when Mode 2 provides sufficient trust signal for the
+   receiver's policy needs.
+
+14.10.  Header Stripping and Modification
+
+   An intermediary mail server could strip or modify the Hardware-
+   Attestation or Hardware-Trust-Proof headers.  This risk is identical
+   to the risk of DKIM signature stripping and is mitigated by the same
+   mechanisms: ARC [RFC8617] preserves authentication results through
+   forwarding chains.
+
+   Stripping these headers cannot cause a legitimate message to appear
+   illegitimate (it simply loses the attestation).  Adding forged
+   headers is prevented by the cryptographic signatures.
+
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 47]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+14.11.  Credential Theft and Identity Substitution
+
+   Because the attestation signature is produced by the sending agent
+   rather than by the mail server, theft of SMTP credentials alone does
+   not grant the attacker a valid attestation.  The agent identity
+   (aid), when present, is cryptographically bound to the signature:
+   substituting a different aid value causes signature verification to
+   fail at the receiving end.
+
+   An attacker who intercepts a legitimately signed attestation header
+   could attempt to replay it on a different message.  The body hash
+   (bh), timestamp (ts), and signed header hashes (h-hash) prevent
+   replay on altered content.  The MSA identity binding requirements in
+   Section 10 provide defense-in-depth: an attestation-aware MSA rejects
+   messages where the agent identity does not match the submitting
+   account, preventing misuse before the message enters the mail system.
+
+   Together, the cryptographic binding of aid in the signature and the
+   MSA submission-time enforcement ensure that an agent cannot claim an
+   identity other than its own.
+
+14.12.  Issuer Trust and Accountability
+
+   The federated issuance model (Section 4.5) means verifiers MUST make
+   their own trust decisions about which Issuers to accept.  A malicious
+   Issuer could issue multiple identities for the same hardware,
+   undermining Sybil resistance.  For Mode 1 (direct attestation) this
+   violation is detectable: verifiers that track hardware fingerprints
+   will observe the same fingerprint appearing under multiple agent
+   identities from the same Issuer.  For Mode 2 (issuer-certified
+   attestation) fingerprints are not visible to recipients, so
+   malicious-Issuer detection is audit-based, not verifier-based:
+   Issuers operating in shared namespaces should participate in
+   transparency-log mechanisms so that cheating is detectable through
+   audit rather than per-message fingerprint correlation.
+
+   Verifiers SHOULD maintain an allowlist of trusted Issuers, analogous
+   to browser trust stores for TLS CAs.  Reputation services MAY track
+   Issuer quality metrics (enrollment anomaly rates, duplicate-
+   fingerprint detections, abuse report correlations) to inform verifier
+   trust decisions.  Verifiers SHOULD remove Issuers from their
+   allowlist when evidence of policy violations is detected.
+
+
+
+
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 48]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+14.13.  Cryptographic Agility and Post-Quantum Migration
+
+   This specification's v=1 format uses ECDSA (ES256) and RSA (RS256,
+   PS256) signatures, which are vulnerable to future quantum computing
+   attacks.  For hardware-backed trust tiers (sovereign, portable,
+   enclave, virtual), the available signature algorithms are determined
+   by the hardware security component: this specification cannot migrate
+   to post-quantum algorithms faster than the TPM, PIV, and enclave
+   silicon it builds on.  As hardware manufacturers adopt post-quantum
+   algorithms (e.g., ML-DSA, SLH-DSA) in their attestation key
+   interfaces, a future v=2 revision will expose those algorithms to
+   verifiers.
+
+   The declared trust tier (software-managed keys) is not hardware-
+   constrained and MAY adopt post-quantum signature algorithms as soon
+   as suitable libraries are available, providing an early migration
+   path for deployments that accept the lower Sybil-resistance trade-off
+   of the declared tier.
+
+   Deployments SHOULD plan for algorithm migration by treating the v=
+   field as a versioning mechanism and ensuring verifiers can support
+   multiple concurrent versions during transition periods.
+
+15.  Privacy Considerations
+
+   This section consolidates the privacy implications of this
+   specification, per [RFC6973].  Hardware attestation inherently
+   involves persistent identifiers; the privacy properties differ
+   significantly between the two modes and between automated and human
+   senders.
+
+15.1.  Applicability to Human vs. Automated Senders
+
+   This specification targets authentication of automated senders -- AI
+   agents, bots, and high-volume automated systems.  It is NOT intended
+   or recommended for individual human users sending personal or low-
+   volume email.  The persistent hardware fingerprint in Mode 1 uniquely
+   identifies the sending device across all messages and contexts,
+   creating linkability that exceeds current email privacy norms for
+   human correspondence.
+
+   Operators of human-facing email services that offer hardware
+   attestation as an opt-in feature MUST provide clear disclosure of the
+   linkability implications before activation.  Receivers SHOULD NOT
+   penalize the absence of hardware attestation from senders exhibiting
+   human-characteristic patterns.
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 49]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+15.2.  Hardware Fingerprint Linkability
+
+   Mode 1 (Direct Hardware Attestation) exposes a persistent, globally
+   unique hardware fingerprint -- the SHA-256 hash of the identity
+   certificate's public key -- to every recipient.  This fingerprint is
+   stable for the lifetime of the hardware device and is identical
+   across all protocols (email, HTTP, agent-to-agent) where the same
+   device attests.
+
+   Any party that observes this fingerprint can correlate messages
+   across recipients, time periods, and transport protocols.  This
+   cross-context linkability is the intended mechanism for reputation
+   building in automated sender scenarios, but it also enables
+   surveillance if misused.
+
+   The identity certificate additionally reveals the hardware
+   manufacturer and device model family.  In most automated deployments
+   this information is not sensitive, but it does narrow the set of
+   possible senders.
+
+15.3.  Privacy-Preserving Alternative (Mode 2)
+
+   Mode 2 (SD-JWT Trust Proof) provides Sybil resistance without
+   revealing the hardware fingerprint or any persistent agent-specific
+   identifier.  Because the Issuer signs the per-message SD-JWT directly
+   (rather than the agent signing with a key embedded in the token), no
+   agent-controlled key appears in the presentation.  Recipients cannot
+   link multiple emails to the same sender based on Mode 2 headers
+   alone.
+
+   The sender selects which claims to disclose; the hardware
+   fingerprint, agent identity URN, and device details can all be
+   withheld.  Only the Issuer identifier (iss) and the message-binding
+   nonce are always visible.
+
+   The privacy cost of full unlinkability is that the agent must contact
+   the Issuer for each email, so the Issuer learns the agent's sending
+   pattern (timing and frequency) though not the message content.
+   Issuers MUST NOT log or correlate message-binding hashes beyond what
+   is necessary for rate limiting and abuse prevention (see
+   Section 15.4).
+
+   Senders operating in contexts where hardware fingerprint disclosure
+   is unacceptable -- including agents that wish to avoid cross-context
+   tracking -- SHOULD use Mode 2 exclusively.  Receivers SHOULD NOT
+   require Mode 1 when Mode 2 provides sufficient trust signal for their
+   policy needs.
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 50]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+15.4.  Issuer Knowledge
+
+   During enrollment, the Issuer learns the agent's hardware fingerprint
+   (identity certificate public key hash) and associates it with the
+   assigned agent identity URN.  This is necessary for anti-Sybil
+   enforcement.
+
+   In Mode 2, the Issuer additionally learns that the agent is sending a
+   message each time the agent requests a per-message SD-JWT.  The
+   Issuer receives the message-binding hash (a SHA-256 digest from which
+   message content cannot be recovered) but does not learn the message
+   recipients, subject, or body.  Issuers MUST NOT log message-binding
+   hashes or correlate per-message signing requests with external data
+   to infer message content or recipients.  Issuers SHOULD implement
+   rate limiting at the per-message signing endpoint to prevent abuse,
+   but MUST delete signing request metadata (timestamps, source IPs,
+   message-binding hashes) within 24 hours.
+
+   The specification deliberately separates enrollment (Issuer) from
+   behavior tracking (reputation services) to limit the Issuer's
+   knowledge of agent activity.
+
+15.5.  Data Minimization
+
+   Verifiers that record hardware fingerprints or agent identity URNs
+   for reputation purposes SHOULD apply data minimization principles:
+   retain only the truncated fingerprint (as specified in Section 5.4)
+   rather than the full identity certificate, and SHOULD define
+   retention policies that limit how long fingerprint-to-message
+   associations are stored.
+
+15.6.  Abuse-Resistant Contact Tokens
+
+   Automated agents typically send from generated addresses (e.g., aid-
+   based mailbox names) that do not route to a human operator.  When a
+   recipient needs to report abuse or request removal, there is no
+   obvious contact path.  Conversely, exposing the operator's real email
+   address in every outbound message creates a spam and social-
+   engineering target.
+
+   Implementations MAY include a short-lived, opaque contact token in
+   outbound messages to bridge this gap.  A contact token is a value
+   that the Issuer can resolve to the operator's real contact address
+   without revealing that address to the message recipient.  The token
+   SHOULD be rotated periodically (e.g., monthly) so that tokens from
+   old messages cannot be used to build a long-term contact profile of
+   the operator.
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 51]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   One approach is to carry the token in a header field alongside the
+   attestation headers.  An Issuer might define a contact-token header
+   containing an HMAC-based opaque token; a recipient sends mail to
+   <token>@contact.<issuer-domain> and the Issuer forwards it to the
+   registered operator.  The token is derived from the agent identity
+   and a time-based rotation key, so it is not linkable across rotation
+   periods and cannot be forged without the Issuer's secret.
+
+   This specification does not mandate a particular contact token format
+   or delivery mechanism.  Issuers that provide contact tokens SHOULD
+   document their token lifetime and resolution procedure.  Recipients
+   SHOULD treat contact tokens as opaque values and SHOULD NOT attempt
+   to derive agent identity from them.
+
+16.  Normative References
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119,
+              DOI 10.17487/RFC2119, March 1997,
+              <https://www.rfc-editor.org/info/rfc2119>.
+
+   [RFC4648]  Josefsson, S., "The Base16, Base32, and Base64 Data
+              Encodings", RFC 4648, DOI 10.17487/RFC4648, October 2006,
+              <https://www.rfc-editor.org/info/rfc4648>.
+
+   [RFC5652]  Housley, R., "Cryptographic Message Syntax (CMS)", STD 70,
+              RFC 5652, DOI 10.17487/RFC5652, September 2009,
+              <https://www.rfc-editor.org/info/rfc5652>.
+
+   [RFC6376]  Crocker, D., Ed., Hansen, T., Ed., and M. Kucherawy, Ed.,
+              "DomainKeys Identified Mail (DKIM) Signatures", STD 76,
+              RFC 6376, DOI 10.17487/RFC6376, September 2011,
+              <https://www.rfc-editor.org/info/rfc6376>.
+
+   [RFC8141]  Saint-Andre, P. and J. Klensin, "Uniform Resource Names
+              (URNs)", RFC 8141, DOI 10.17487/RFC8141, April 2017,
+              <https://www.rfc-editor.org/info/rfc8141>.
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
+              May 2017, <https://www.rfc-editor.org/info/rfc8174>.
+
+   [RFC8552]  Crocker, D., "Scoped Interpretation of DNS Resource
+              Records through "Underscored" Naming of Attribute Leaves",
+              BCP 222, RFC 8552, DOI 10.17487/RFC8552, March 2019,
+              <https://www.rfc-editor.org/info/rfc8552>.
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 52]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   [RFC8601]  Kucherawy, M., "Message Header Field for Indicating
+              Message Authentication Status", RFC 8601,
+              DOI 10.17487/RFC8601, May 2019,
+              <https://www.rfc-editor.org/info/rfc8601>.
+
+   [RFC5322]  Resnick, P., Ed., "Internet Message Format", RFC 5322,
+              DOI 10.17487/RFC5322, October 2008,
+              <https://www.rfc-editor.org/info/rfc5322>.
+
+   [RFC9901]  Fett, D., Yasuda, K., and B. Campbell, "Selective
+              Disclosure for JSON Web Tokens", RFC 9901,
+              DOI 10.17487/RFC9901, November 2025,
+              <https://www.rfc-editor.org/info/rfc9901>.
+
+17.  Informative References
+
+   [I-D.drake-agent-identity-registry]
+              Drake, C., "Agent Identity Registry System", Work in
+              Progress, Internet-Draft, draft-drake-agent-identity-
+              registry-04, July 2026, <https://datatracker.ietf.org/doc/
+              draft-drake-agent-identity-registry/>.
+
+   [I-D.drake-agent-identity-problem-statement]
+              Drake, C., "Identity for Autonomous Agents and Robots:
+              Problem Statement, Threat Model, and Terminology", Work in
+              Progress, Internet-Draft, draft-drake-agent-identity-
+              problem-statement-00, July 2026,
+              <https://datatracker.ietf.org/doc/draft-drake-agent-
+              identity-problem-statement/>.
+
+   [I-D.drake-agent-identity-resolution]
+              Drake, C., "Resolution and Verification of Agent
+              Identities using DNS and RDAP", Work in Progress,
+              Internet-Draft, draft-drake-agent-identity-resolution-00,
+              July 2026, <https://datatracker.ietf.org/doc/draft-drake-
+              agent-identity-resolution/>.
+
+   [RFC3156]  Elkins, M., Del Torto, D., Levien, R., and T. Roessler,
+              "MIME Security with OpenPGP", RFC 3156,
+              DOI 10.17487/RFC3156, August 2001,
+              <https://www.rfc-editor.org/info/rfc3156>.
+
+   [RFC7208]  Kitterman, S., "Sender Policy Framework (SPF) for
+              Authorizing Use of Domains in Email, Version 1", RFC 7208,
+              DOI 10.17487/RFC7208, April 2014,
+              <https://www.rfc-editor.org/info/rfc7208>.
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 53]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   [RFC7489]  Kucherawy, M., Ed. and E. Zwicky, Ed., "Domain-based
+              Message Authentication, Reporting, and Conformance
+              (DMARC)", RFC 7489, DOI 10.17487/RFC7489, March 2015,
+              <https://www.rfc-editor.org/info/rfc7489>.
+
+   [RFC7671]  Dukhovni, V. and W. Hardaker, "The DNS-Based
+              Authentication of Named Entities (DANE) Protocol: Updates
+              and Operational Guidance", RFC 7671, DOI 10.17487/RFC7671,
+              October 2015, <https://www.rfc-editor.org/info/rfc7671>.
+
+   [RFC7942]  Sheffer, Y. and A. Farrel, "Improving Awareness of Running
+              Code: The Implementation Status Section", BCP 205,
+              RFC 7942, DOI 10.17487/RFC7942, July 2016,
+              <https://www.rfc-editor.org/info/rfc7942>.
+
+   [RFC8126]  Cotton, M., Leiba, B., and T. Narten, "Guidelines for
+              Writing an IANA Considerations Section in RFCs", BCP 26,
+              RFC 8126, DOI 10.17487/RFC8126, June 2017,
+              <https://www.rfc-editor.org/info/rfc8126>.
+
+   [RFC8551]  Schaad, J., Ramsdell, B., and S. Turner, "Secure/
+              Multipurpose Internet Mail Extensions (S/MIME) Version 4.0
+              Message Specification", RFC 8551, DOI 10.17487/RFC8551,
+              April 2019, <https://www.rfc-editor.org/info/rfc8551>.
+
+   [RFC8617]  Andersen, K., Long, B., Ed., Blank, S., Ed., and M.
+              Kucherawy, Ed., "The Authenticated Received Chain (ARC)
+              Protocol", RFC 8617, DOI 10.17487/RFC8617, July 2019,
+              <https://www.rfc-editor.org/info/rfc8617>.
+
+   [RFC6973]  Cooper, A., Tschofenig, H., Aboba, B., Peterson, J.,
+              Morris, J., Hansen, M., and R. Smith, "Privacy
+              Considerations for Internet Protocols", RFC 6973,
+              DOI 10.17487/RFC6973, July 2013,
+              <https://www.rfc-editor.org/info/rfc6973>.
+
+   [RFC9162]  Laurie, B., Messeri, E., and R. Stradling, "Certificate
+              Transparency Version 2.0", RFC 9162, DOI 10.17487/RFC9162,
+              December 2021, <https://www.rfc-editor.org/info/rfc9162>.
+
+   [RFC9334]  Birkholz, H., Thaler, D., Richardson, M., Smith, N., and
+              W. Pan, "Remote ATtestation procedureS (RATS)
+              Architecture", RFC 9334, DOI 10.17487/RFC9334, January
+              2023, <https://www.rfc-editor.org/info/rfc9334>.
+
+
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 54]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   [RFC9711]  Lundblade, L., Mandyam, G., O'Donoghue, J., and C.
+              Wallace, "The Entity Attestation Token (EAT)", RFC 9711,
+              DOI 10.17487/RFC9711, April 2025,
+              <https://www.rfc-editor.org/info/rfc9711>.
+
+   [RFC9783]  Tschofenig, H., Frost, S., Brossard, M., Shaw, A., and T.
+              Fossati, "Arm's Platform Security Architecture (PSA)
+              Attestation Token", RFC 9783, DOI 10.17487/RFC9783, June
+              2025, <https://www.rfc-editor.org/info/rfc9783>.
+
+   [TCG-TPM2] Trusted Computing Group, "TPM 2.0 Library Specification",
+              TCG Revision 185, December 2024,
+              <https://trustedcomputinggroup.org/resource/tpm-library-
+              specification/>.
+
+   [TCG-EK-PROFILE]
+              Trusted Computing Group, "TCG EK Credential Profile for
+              TPM Family 2.0", TCG Version 2.6, December 2024,
+              <https://trustedcomputinggroup.org/resource/tcg-ek-
+              credential-profile-for-tpm-family-2-0/>.
+
+Appendix A.  Appendix: Hardware Manufacturer Root CAs
+
+   The following hardware manufacturers, among others, publish root CA
+   certificates that can be used to validate identity certificate
+   chains.  This list is illustrative, not exhaustive or preferential;
+   the authoritative set of accepted roots is the Global Hardware Trust
+   Store maintained by the Governance Authority
+   ([I-D.drake-agent-identity-registry]):
+
+   Intel  Provides EK CA certificates via a REST API for firmware TPM
+      (Platform Trust Technology / PTT) and discrete TPM devices.  See
+      https://trustedservices.intel.com/.
+
+   AMD  AMD fTPM EK certificates are available via
+      https://ftpm.amd.com/pki/aia/.  AMD Secure Encrypted
+      Virtualization (SEV) attestation keys use a separate distribution
+      at https://download.amd.com/sev/.
+
+   Infineon  Infineon OPTIGA TPM certificates.  Root CA available via
+      Infineon's PKI.  See https://www.infineon.com/TPM.
+
+   STMicroelectronics  Root certificates available through ST's TPM
+      documentation portal.
+
+   Nuvoton  Root certificates available through Nuvoton's security
+      products documentation.
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 55]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   Yubico  PIV attestation CA certificates for YubiKey devices.  See
+      https://developers.yubico.com/PIV/Introduction/piv-
+      attestation.html.
+
+   Receiving mail servers implementing this specification SHOULD
+   maintain a local trust store of hardware manufacturer root CAs,
+   updated periodically.  A community-maintained trust store (analogous
+   to Mozilla's CA certificate program for TLS) would benefit the
+   ecosystem.  An open-source trust store project is available at
+   https://github.com/1id-com/tpm-manufacturer-cas.
+
+Appendix B.  Appendix: Live Email Examples
+
+   This appendix contains five complete email messages, one per trust
+   tier, generated by the reference implementation of this
+   specification.  Each was sent through the MailPal.com submission
+   service, verified and stamped by the receiving MailPal.com milter
+   (the embedded Authentication-Results headers), then reproduced here
+   verbatim from the receiving store; all base64-encoded values,
+   signatures, and certificate chains are the original bytes as
+   transmitted, re-folded only for width.
+
+   These are genuine, cryptographically verifiable messages.  Readers
+   can independently verify every example using the open-source hw-
+   attest-verify tool (https://github.com/1id-com/hw-attest-verify),
+   installable via "pip install hw-attest-verify".  For each email file,
+   run:
+
+   $ python3 -m hw_attest_verify --auth-results --no-time-check \
+       --hostname mailpal.com < example.eml
+
+   The --no-time-check flag disables token expiry enforcement, since SD-
+   JWT tokens have a five-minute lifetime and will have expired by the
+   time of reading.  Mode 1 (Hardware-Attestation) verification and the
+   Mode 2 message binding and signature have no time dependency.  The
+   examples collectively demonstrate all five trust tiers (sovereign,
+   portable, enclave, virtual, declared) in Combined Mode (Mode 1 + Mode
+   2), and the Authentication-Results headers injected by the
+   MailPal.com verifier milter during SMTP reception.
+
+
+
+
+
+
+
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 56]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   Note on certificate chains: the Mode 1 (Hardware-Attestation)
+   examples contain CMS certificate chains rooted at the Issuer's own CA
+   ("1ID Root CA A" / "1ID Intermediate CA A"), not at hardware
+   manufacturer root CAs.  The Issuer verifies the manufacturer
+   certificate chain during enrollment and then issues its own Issuer-
+   certified certificate binding the device public key to the verified
+   hardware identity; the resulting CMS chain is Agent Certificate
+   (Issuer-signed) -> Issuer Intermediate CA -> Issuer Root CA.
+   Deployments without an Issuer would instead include the full
+   manufacturer chain (Section 5.1).  Both formats are valid.
+
+   NOTE TO RFC EDITOR: Please retain the examples but remove this note.
+   They are a non-normative aid to implementers and reviewers: complete,
+   independently verifiable messages demonstrating every trust tier in
+   Combined Mode.
+
+B.1.  Example 1: Sovereign-Tier TPM (Combined Mode)
+
+   A sovereign-tier identity backed by an Intel firmware TPM (fTPM) on a
+   Windows host.  Combined Mode: the Hardware-Attestation header carries
+   a CMS SignedData bundle whose X.509 chain is rooted at the Issuer CA
+   and signed by the TPM Attestation Key (RS256); the Hardware-Trust-
+   Proof header carries an SD-JWT with a selectively disclosed
+   trust_tier claim.  The From address (a MailPal mailbox) is
+   independent of the agent identity URN, showing that email sender
+   identity and hardware identity are decoupled.
+
+Delivered-To: 1id-tkoie2ve@mailpal.com
+X-Spam-Status: No
+Received: from [172.22.1.89] (unknown [110.143.72.26] (AS1221 Telstra Li
+        mited, AU)) (using TLSv1.3 with cipher TLS13_AES_256_GCM_SHA384)
+         by mail.mailpal.com (Stalwart SMTP) with ESMTPSA id 46E805DFA2E
+        7E96; Mon, 20 Jul 2026 12:23:24 +0000
+Authentication-Results: mail.mailpal.com; none
+Return-Path: <1id-tkoie2ve@mailpal.com>
+DKIM-Signature: v=1; a=rsa-sha256; s=rsa; d=mailpal.com; c=relaxed/relax
+        ed; r=y; h=MIME-Version:Content-Transfer-Encoding:Content-Type:M
+        essage-ID:Date :Subject:To:From:Reply-To:Cc:In-Reply-To:Referenc
+        es:List-Id :List-Unsubscribe:Organization:User-Agent:Thread-Topi
+        c:Thread-Index; t=1784550204; x=1785414204; bh=+zYoqGOZF+SLg2o73
+        XQWN+dHdoYKhBx/EjD2iF9eSQ8= ; b=EpOBjJhISvap17u4wTQYs0TPUxFKsS1o
+        fKJFgJqXdopTJB+Km4DUnlUov8S1C7PMPd7ZmFf saBUZX1I+P5Q3Axe8GnG3+Ai
+        U/cXR84nALLgPiIa62JMLKrmU0YN60yvXV2Wdjb6aVXrWxaYtCB fhXRZ4YlpbGL
+        tAloK1Pl45SM9GONbj5CEb+xahRh34cVAZdoZArlwU1wEdbGQN5yHNnyrbWHK6h
+        vdU4utC0AfTT+TwO35AO+MzerXKrQ+0itvxmDDL3Bp9NyYhBZOoQCtCokJKIoqtk
+        dw1ZRjsjd5i 6YXbJBPNAY6GTUnMQ9m39rABZGfoZuQV67ivio5Bjzif1w==;
+Authentication-Results: mailpal.com; hw-attest=pass header.typ=TPM heade
+        r.alg=RS256 header.tier=sovereign header.aid=urn:aid:global:id-f
+
+
+
+Drake                    Expires 18 January 2027               [Page 57]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+        cwgq-krznn-gdjzw-hmcbg
+Authentication-Results: mailpal.com; hw-trust=pass header.trust_tier=sov
+        ereign header.issuer=1id.com
+From: "RoG TPM (fleet sovereign)" <1id-tkoie2ve@mailpal.com>
+To: 1id-tkoie2ve@mailpal.com
+Subject: G4.6 sovereign TPM live round trip 1784550207
+Date: Mon, 20 Jul 2026 22:23:27 +1000
+Message-ID: <178455020763.42984.1964707234517379707@mailpal.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+Hardware-Trust-Proof: eyJhbGciOiJFUzI1NiIsImtpZCI6IjFpZC1od2F0dGVzdC1lcz
+        I1Ni0xIiwidHlwIjoic2Qrand0In0.eyJpc3MiOiJodHRwczovLzFpZC5jb20iLC
+        JpYXQiOjE3ODQ1NTAyMDcsImV4cCI6MTc4NDU1MDUwNywibm9uY2UiOiJ5eFdSRF
+        ZicmdaWmo0ZDJjdWV6NVhqS0IzLUtNXzRyWHhvX2I0NjQ5WnhBIiwiX3NkX2FsZy
+        I6InNoYS0yNTYiLCJfc2QiOlsiaVFlVUlIQ1lYN2lFeWJDWklGazlDeHVVM29tNE
+        VTXzdrdjh4Z1VPeEVRTSJdfQ.EeEwXY8jJunAq4OnGcbuttRJo30qaP-Bs7dNwle
+        tEbLDKwZOFQPqMrVN1gfZIY3z6lGYWNcf9o6XBJEcRdFvzw~WyJCMENiTUlGbmhO
+        VjdZWUtpaEdKMUNRIiwidHJ1c3RfdGllciIsInNvdmVyZWlnbiJd~
+X-1ID-Contact-Token: 84a1d0f5
+Hardware-Attestation: v=1;typ=TPM;alg=RS256;h=from:to:subject:date:messa
+        ge-id:content-transfer-encoding:content-type:mime-version:from:t
+        o:subject:date:message-id:content-transfer-encoding:content-type
+        :mime-version;bh=-zYoqGOZF-SLg2o73XQWN-dHdoYKhBx_EjD2iF9eSQ8;ts=
+        1784550210;chain=MIIMGwYJKoZIhvcNAQcCoIIMDDCCDAgCAQExDzANBglghkg
+        BZQMEAgEFADALBgkqhkiG9w0BBwGgggpwMIID+zCCAuOgAwIBAgIUbIDUFbWTm+3
+        GcW51c5JHh844urwwDQYJKoZIhvcNAQELBQAwLjEMMAoGA1UECgwDMUlEMR4wHAY
+        DVQQDDBUxSUQgSW50ZXJtZWRpYXRlIENBIEEwHhcNMjYwNzIwMTIxNjAzWhcNMjc
+        wNzIwMTIxNjAzWjBZMQwwCgYDVQQKDAMxSUQxMjAwBgNVBAMMKXVybjphaWQ6Z2x
+        vYmFsOmlkLWZjd2dxLWtyem5uLWdkanp3LWhtY2JnMRUwEwYDVQQFEwwxaWQtdGt
+        vaWUydmUwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDb8rFwvCC0p4R
+        nKoOunVilkC6faTiWZo+sk2yAg1S8nQcHNSxhEAFtwQnnul1PwbNJ/dbkTiQkMN4
+        4KwjIgVDr0ujI6Mf/DU9YH2fbA0BlVzeYENLfR/q/bxDye2C/Y4WJpcVkKfn0ur4
+        WTa5h+4OF8BCvhLGzLHPB9GbsSgDNUu6feOOxvSDmTpBTCt92cQgmNNAxZsM17v3
+        ZBhX7jmkljOXGs1s/5MajrXKU+9wApicUOi1N8swelcG38AlpupJUDSrHdXOxU+Y
+        V+WWLRKg13iKSBlskKfU0IDW1CD3iQljtqwy5odGV8Kl0eMgainjVoVI63J30IDX
+        64ye8wdM/AgMBAAGjgeUwgeIwNAYDVR0RBC0wK4YpdXJuOmFpZDpnbG9iYWw6aWQ
+        tZmN3Z3Eta3J6bm4tZ2RqenctaG1jYmcwDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8
+        EBAMCB4AwHQYDVR0OBBYEFGugv3OTUwMyMwbhTIi+Nl3N1fxBMB8GA1UdIwQYMBa
+        AFGciwHngVXI2J7NEovNM34Bd35auMBcGCisGAQQBg9RfAQEECXNvdmVyZWlnbjA
+        iBgorBgEEAYPUXwECBBQyMDI2LTAzLTA0VDAwOjA5OjI2WjAPBgorBgEEAYPUXwE
+        DBAEAMA0GCSqGSIb3DQEBCwUAA4IBAQAo1TUz4HNgVG+/M7EFEYRWs/RKi53R/Hk
+        DdprF9b7Ji1QVq3li5F/QoPV4pT3d/nRv/VsdU1jUkT7lpSyLzGVCCDWDY8qkcHI
+        Jv2A+ydzhB/hxE+PmRFVY5/bVf1iMLQhnfakXvHO1qNOfgz+9sHSMvk0qt+yJFNz
+        x0rQMzMB7qSdR6exh8bLc9FkZdsqEkj6KgSX2O4dNbZTMuzOP7Pkg2jOocNdBMuw
+        NY8FzjVcbwF9Ogz2pq9Ormkkks3UIIDKz7nohvqep3XMDmq/cVLK1F0NkoxV9mFG
+        L9f/j6JBaX7mTH/m0vzQaV5toDiN+L1DOoGNtA2CfS1uYP9AyLS0iMIIDSDCCAjC
+        gAwIBAgIUSEEYK28j6n6Vhr+w4PvDkiuyQbEwDQYJKoZIhvcNAQELBQAwJjEMMAo
+
+
+
+Drake                    Expires 18 January 2027               [Page 58]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+        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;ai
+        d=urn:aid:global:id-fcwgq-krznn-gdjzw-hmcbg
+
+Signed by an Intel PTT TPM AK (sovereign tier).
+
+       Figure 1: Example 1: Sovereign-Tier TPM (Combined Mode)
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 59]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+B.2.  Example 2: Portable-Tier PIV/YubiKey (Combined Mode)
+
+   The portable tier, authenticated by a Yubico YubiKey 5 (PIV slot 9a,
+   ECDSA P-256).  Mode 1 is ES256 signed inside the YubiKey; Mode 2 is
+   the Issuer's SD-JWT.  The trust_tier is "portable", reflecting the
+   device used for this message.
+
+Delivered-To: 1id-wat7nx1v@mailpal.com
+X-Spam-Status: No
+Received: from mac-mini.local (unknown [110.143.72.26] (AS1221 Telstra L
+        imited, AU)) (using TLSv1.3 with cipher TLS13_AES_256_GCM_SHA384
+        ) by mail.mailpal.com (Stalwart SMTP) with ESMTPSA id 46E54FF73E
+        C0896; Mon, 20 Jul 2026 06:04:26 +0000
+Authentication-Results: mail.mailpal.com; none
+Return-Path: <1id-wat7nx1v@mailpal.com>
+DKIM-Signature: v=1; a=rsa-sha256; s=rsa; d=mailpal.com; c=relaxed/relax
+        ed; r=y; h=MIME-Version:Content-Transfer-Encoding:Content-Type:M
+        essage-ID:Date :Subject:To:From:Reply-To:Cc:In-Reply-To:Referenc
+        es:List-Id :List-Unsubscribe:Organization:User-Agent:Thread-Topi
+        c:Thread-Index; t=1784527466; x=1785391466; bh=XLLTul1I5rE6+kqkl
+        eRP21xv5ryo+rFdicfhGU6luiI= ; b=CqK0+FE2aBW+37GD3nRPFA057OrHzISz
+        RxwyKwfyF5QJvcfIcy/2ZV2PancsrB33GH3HK11 OJYkIDaIQR87aYJm+3D9bDX5
+        vAtB2fPnQ78h13+zpBHsusa9DMVCv5/AbgU9LUfaKopRh7wR9Wi 5PoWhsB+yxyi
+        dGnFS7Z43Hhd2CKwhFisrgl0/XiwuetWyCga5qnh+d0eUxH8ksvD53BMDUdp69E
+        //2oF6QSQWWJDUSIm/dWaesxAKdDeL3RN09zYiZiEzdfVFizffIbx7Ie1WLkKk9Q
+        A2DGh1X+9Bg jHzStqphxswWajwjdJoqs6w0ByumeHAHUyFKQoe6+K1Iuw==;
+Authentication-Results: mailpal.com; hw-attest=pass header.typ=PIV heade
+        r.alg=ES256 header.tier=portable header.aid=urn:aid:global:id-px
+        fpr-jcbdf-pbktm-dvzxk
+Authentication-Results: mailpal.com; hw-trust=pass header.trust_tier=por
+        table header.issuer=1id.com
+From: "Mini YubiKey (fleet portable)" <1id-wat7nx1v@mailpal.com>
+To: 1id-wat7nx1v@mailpal.com
+Subject: G4.3 live round trip 1784527463
+Date: Mon, 20 Jul 2026 16:04:23 +1000
+Message-ID: <178452746341.60729.1268314708737853327@mailpal.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+Hardware-Trust-Proof: eyJhbGciOiJFUzI1NiIsImtpZCI6IjFpZC1od2F0dGVzdC1lcz
+        I1Ni0xIiwidHlwIjoic2Qrand0In0.eyJpc3MiOiJodHRwczovLzFpZC5jb20iLC
+        JpYXQiOjE3ODQ1Mjc0NjMsImV4cCI6MTc4NDUyNzc2Mywibm9uY2UiOiIzX2diNU
+        lLb3JUdGNLb0hMZ2hNWmd3YmQtWEFvNl9DNlA1ajYyT0xKVDhvIiwiX3NkX2FsZy
+        I6InNoYS0yNTYiLCJfc2QiOlsiLUs4dXNUcVlhLXpiaTB1QkZjZ3FOVFpDZkRoUj
+        lyRmZOY3EwVUM3dF9BZyJdfQ.UBetwtX8Qw6MCaC02jdp_UECyryO3kzeq0h_qub
+        QWt2dQwIYIXDf4XNvTkpew0knJFxIr998ARhaFJ5RtVJyAw~WyJENHZ2QWc4SWEw
+        ZEZRc3RORzR4cDd3IiwidHJ1c3RfdGllciIsInBvcnRhYmxlIl0~
+X-1ID-Contact-Token: 6028a5f5
+
+
+
+Drake                    Expires 18 January 2027               [Page 60]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+Hardware-Attestation: v=1;typ=PIV;alg=ES256;h=from:to:subject:date:messa
+        ge-id:content-transfer-encoding:content-type:mime-version:from:t
+        o:subject:date:message-id:content-transfer-encoding:content-type
+        :mime-version;bh=XLLTul1I5rE6-kqkleRP21xv5ryo-rFdicfhGU6luiI;ts=
+        1784527464;chain=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
+
+
+
+Drake                    Expires 18 January 2027               [Page 61]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+        Fl5pXW7mipdf2ufiYEIc1lEBtf34krCWM3PEvnl0Rs4eEirDirxx7PFP18GOgoNy
+        aQ8NNZZSOqC6LMrWdoXO6v8MKQVcCcInRsTfdPQIDAQABo0UwQzASBgNVHRMBAf8
+        ECDAGAQH/AgEBMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUw7fpWXXFX/lGDy8
+        5m5SqTPkl8PAwDQYJKoZIhvcNAQELBQADggEBAAhRXzslG92koaKTfGR2KPZvOP3
+        sxZvHBemfwb4tICwaegZlNtHztqP7qcLqWfsHG0Caob8e2rbjMjpPaMY81328kgl
+        7goVPTEuq3Af5joZOArHfizgQl9r5RwT9G3y/AgDTnZDF6uUKt5P1u8PUd8t6dUA
+        NvIjMvqD6eV8ERioMu+BL7GpbDvy7smvmsCpy1isY0aSlh112LGboJueGSbiMx35
+        wMKr6ofXy0EE+Iz2JxPX1+rPzxZ9YI5iYcUEVptBZW0Ik83sLXJdVG6Z745awnOA
+        QnkriRwt2b0r/JRbmu7TQrzAv/K0PTXTuYf3DYxqCl04w8cpgEaPd5rWG4yYxgbI
+        wga8CAQEwRjAuMQwwCgYDVQQKDAMxSUQxHjAcBgNVBAMMFTFJRCBJbnRlcm1lZGl
+        hdGUgQ0EgQQIUThXkjH+cds5IdPTyVhPQWLnDYUkwDQYJYIZIAWUDBAIBBQAwCgY
+        IKoZIzj0EAwIERzBFAiBzIHgZ/aPAv134JgXwVVKArKJNiXGoLwIFIRUQTdg0agI
+        hANyaE6m7I0PJ26bGRwX3ppHECxrMZ8EtjxM3m1x8fHTc;aid=urn:aid:global
+        :id-pxfpr-jcbdf-pbktm-dvzxk
+
+Hardware-attested live round trip.
+
+    Figure 2: Example 2: Portable-Tier PIV/YubiKey (Combined Mode)
+
+B.3.  Example 3: Enclave-Tier Apple Secure Enclave (Combined Mode)
+
+   The enclave tier, authenticated by an Apple Secure Enclave (M-series
+   Mac).  The Enclave signs Mode 1 with a non-extractable P-256 key
+   (ES256); Mode 2 is the Issuer's SD-JWT.
+
+Delivered-To: 1id-xiz43mxz@mailpal.com
+X-Spam-Status: No
+Received: from mac-mini.local (unknown [110.143.72.26] (AS1221 Telstra L
+        imited, AU)) (using TLSv1.3 with cipher TLS13_AES_256_GCM_SHA384
+        ) by mail.mailpal.com (Stalwart SMTP) with ESMTPSA id 46EB43B8BD
+        01296; Mon, 20 Jul 2026 19:56:37 +0000
+Authentication-Results: mail.mailpal.com; none
+Return-Path: <1id-xiz43mxz@mailpal.com>
+DKIM-Signature: v=1; a=rsa-sha256; s=rsa; d=mailpal.com; c=relaxed/relax
+        ed; r=y; h=MIME-Version:Content-Transfer-Encoding:Content-Type:M
+        essage-ID:Date :Subject:To:From:Reply-To:Cc:In-Reply-To:Referenc
+        es:List-Id :List-Unsubscribe:Organization:User-Agent:Thread-Topi
+        c:Thread-Index; t=1784577397; x=1785441397; bh=x7PBxYU9zbJ/Iyvcu
+        LiJtP35Kg90x5zK9MbuIsBdMCI= ; b=VX1QrFHOm36KDPCdLe0TCrBzX1FIszvv
+        As0K9v1RUtzML4fmY316ShWfHIgyGycJJs8oDEd u0rRwh3IzBT/KpxR6+irBnKx
+        nmNhXgqBYb1p8tDH7A3qVqiffGlHKxIa//a0DCFLjdEW48ycM6D BmGYiqtmQ4z9
+        2RDjwWKVjoQT50E6UpcqoZ9rs8+k3iRnpwOojLuOttuFX5KoUNQxD0XZION/j+j
+        27l9G617tbDkXJuZx+w+eW11CsKhaW+Z2EL8bzOXOp35FAvT3ZZTsHFtGQxbMPG9
+        4vzjjN8C/HR LZnxJk/vdkeFCds5FJWc1TSAuD4nU/LxP1PJwr4P9PJq6Q==;
+Authentication-Results: mailpal.com; hw-attest=pass header.typ=ENC heade
+        r.alg=ES256 header.tier=enclave header.aid=urn:aid:global:id-bfg
+        qg-nbzqp-ktchf-rvxpk
+Authentication-Results: mailpal.com; hw-trust=pass header.trust_tier=enc
+
+
+
+Drake                    Expires 18 January 2027               [Page 62]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+        lave header.issuer=1id.com
+From: 1id-xiz43mxz@mailpal.com
+To: 1id-xiz43mxz@mailpal.com
+Subject: G4.6 enclave SE live round trip 1784577392
+Date: Tue, 21 Jul 2026 05:56:32 +1000
+Message-ID: <178457739248.2337.8656048910547302110@mailpal.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+Hardware-Trust-Proof: eyJhbGciOiJFUzI1NiIsImtpZCI6IjFpZC1od2F0dGVzdC1lcz
+        I1Ni0xIiwidHlwIjoic2Qrand0In0.eyJpc3MiOiJodHRwczovLzFpZC5jb20iLC
+        JpYXQiOjE3ODQ1NzczOTMsImV4cCI6MTc4NDU3NzY5Mywibm9uY2UiOiJfZ2E1dD
+        RtaEVWd0xlUzliNzJweE5RUl94N2dEdURQNHM1V1VhVVdpal9BIiwiX3NkX2FsZy
+        I6InNoYS0yNTYiLCJfc2QiOlsiUXg0czVBcVIxYW9pU3FaREpXZlk0MEEwdHpjQT
+        B6eU0zUkxaZXBhaDVVdyJdfQ._-zT87Sb_r4ecbRHlMRsLf7teMgqrrqw9MSlmFG
+        V0AF9imzu9NTkng4sWz6r4qFpOgtshA-cCWmeUhumhgUy9Q~WyJJR1RaQ1lYaW9E
+        Nm43WHpxM2xPT3pRIiwidHJ1c3RfdGllciIsImVuY2xhdmUiXQ~
+X-1ID-Contact-Token: a5b37c69
+Hardware-Attestation: v=1;typ=ENC;alg=ES256;h=from:to:subject:date:messa
+        ge-id:content-transfer-encoding:content-type:mime-version:from:t
+        o:subject:date:message-id:content-transfer-encoding:content-type
+        :mime-version;bh=x7PBxYU9zbJ_IyvcuLiJtP35Kg90x5zK9MbuIsBdMCI;ts=
+        1784577395;chain=MIIKjwYJKoZIhvcNAQcCoIIKgDCCCnwCAQExDzANBglghkg
+        BZQMEAgEFADALBgkqhkiG9w0BBwGgggmjMIIDLjCCAhagAwIBAgIUT3eeYJd3KN3
+        jj71x+5OcVEO1ZqswDQYJKoZIhvcNAQELBQAwLjEMMAoGA1UECgwDMUlEMR4wHAY
+        DVQQDDBUxSUQgSW50ZXJtZWRpYXRlIENBIEEwHhcNMjYwNzIwMTk1MjQ4WhcNMjc
+        wNzIwMTk1MjQ4WjBZMQwwCgYDVQQKDAMxSUQxMjAwBgNVBAMMKXVybjphaWQ6Z2x
+        vYmFsOmlkLWJmZ3FnLW5ienFwLWt0Y2hmLXJ2eHBrMRUwEwYDVQQFEwwxaWQteGl
+        6NDNteHowWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAR8L1EkCXyyGrxrtkpm6+S
+        rMoDpTGT9COWkeXwD48k86xLgysbEGOeOzGtWw9H5AVq51RQgkmZRhNCWFCEBqdH
+        zo4HjMIHgMDQGA1UdEQQtMCuGKXVybjphaWQ6Z2xvYmFsOmlkLWJmZ3FnLW5ienF
+        wLWt0Y2hmLXJ2eHBrMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1U
+        dDgQWBBTAqM+4MfZtRYdrcw5okdBQz6n40zAfBgNVHSMEGDAWgBRnIsB54FVyNie
+        zRKLzTN+AXd+WrjAVBgorBgEEAYPUXwEBBAdlbmNsYXZlMCIGCisGAQQBg9RfAQI
+        EFDIwMjYtMDMtMjZUMDU6MzQ6NTlaMA8GCisGAQQBg9RfAQMEAQEwDQYJKoZIhvc
+        NAQELBQADggEBAB9p6SES+t/Fg1HMNzTnUsoIA+SMZiNKa/oHv6tv0PzsKibjyXN
+        5jEB9d54JYuCcGAocp0JNGXcuOWT6V4AeOisDlWMPz4mTjBf3OYhkX3tbHPnOz2X
+        UGHtR7QmjM7XQMU9e/KCX3HEAkCNmFBDq7w3ViBGAjm+LtGq+rKreN7DBKMXEAih
+        3PHry8E2U7wbeZGl4AEjOJ+Hc/WFzGF6vujTYf/7n/IzGI/+o9xi/+UgjrPMMVZg
+        5/X2H0q+X+i1yDmeMspQ/dwvNwYcZKao8ITni2QaLIwIj8C6Eanq4zLXKsib8Nhl
+        tvMqEiyqN7xQqyNtZ9pdS0zRyEGaFNXke6powggNIMIICMKADAgECAhRIQRgrbyP
+        qfpWGv7Dg+8OSK7JBsTANBgkqhkiG9w0BAQsFADAmMQwwCgYDVQQKDAMxSUQxFjA
+        UBgNVBAMMDTFJRCBSb290IENBIEEwHhcNMjYwMzE0MTQxMzQ3WhcNMzEwMzEzMTQ
+        xMzQ3WjAuMQwwCgYDVQQKDAMxSUQxHjAcBgNVBAMMFTFJRCBJbnRlcm1lZGlhdGU
+        gQ0EgQTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALnnjGxUNFQnd8w
+        RAhIrdrKHPYNMWkcMy+EE/owepO3/XXocMk2P7apcl0CZUfwZ1fMzCb+232esavH
+        hJ3e9x2h3ClScXYOFUBJnx7ZOJhgH1rgMu49zeU7D6XBU6oJCZQMFKd5B98g1T7z
+        tah821ZlBXbw7HLYcUN8WFT9aQj3VrKIj+KEdC9BMmmqpk8Btif4SMP7wBqsFseA
+
+
+
+Drake                    Expires 18 January 2027               [Page 63]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+        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;aid=urn:aid:global
+        :id-bfgqg-nbzqp-ktchf-rvxpk
+
+Signed by an Apple Secure Enclave (enclave tier).
+
+   Figure 3: Example 3: Enclave-Tier Apple Secure Enclave (Combined
+                                Mode)
+
+B.4.  Example 4: Virtual-Tier vTPM (Combined Mode)
+
+   The virtual tier, authenticated by a VMware virtual TPM 2.0 in a
+   Windows 11 guest.  Mode 1 is signed by the vTPM Attestation Key; Mode
+   2 is the Issuer's SD-JWT.  The trust_tier is "virtual",
+   distinguishing software-virtualized hardware roots from physical
+   ones.
+
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 64]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+Delivered-To: 1id-jq8c84k4@mailpal.com
+X-Spam-Status: No
+Received: from [172.22.1.46] (unknown [110.143.72.26] (AS1221 Telstra Li
+        mited, AU)) (using TLSv1.3 with cipher TLS13_AES_256_GCM_SHA384)
+         by mail.mailpal.com (Stalwart SMTP) with ESMTPSA id 46E843E100E
+        9296; Mon, 20 Jul 2026 12:57:16 +0000
+Authentication-Results: mail.mailpal.com; none
+Return-Path: <1id-jq8c84k4@mailpal.com>
+DKIM-Signature: v=1; a=rsa-sha256; s=rsa; d=mailpal.com; c=relaxed/relax
+        ed; r=y; h=MIME-Version:Content-Transfer-Encoding:Content-Type:M
+        essage-ID:Date :Subject:To:From:Reply-To:Cc:In-Reply-To:Referenc
+        es:List-Id :List-Unsubscribe:Organization:User-Agent:Thread-Topi
+        c:Thread-Index; t=1784552236; x=1785416236; bh=j94kQdwkDpr0beg/2
+        AYPsvBliBSyGJGVgB5HAaW4fxQ= ; b=EHVA1YrEMiJrcy5oO4EhPcUe4SmstfCR
+        6Ej3b77+4HnBYTHUqvfo17hoVdtjrLOtG16d8xu UDC2ckEsVg4neTXzchvIVA4x
+        ul8jTBgCKjaDNWTc4SYDhMlqnpnRhModCbZ4WFoltLB8C9n+KsZ Ybc1t/0/FtSh
+        pLPtKwvewUqyjPMoIi1WqmqmUxTEZ/ovWBfQ3GD6zwDr6iromBpdyH8B3UyMRyf
+        Xel/gmfjubN+rDFjkbVQ8uoAay5WXj/WNzq95vWHqtaOae8FoEvDV2gBNWmstbg2
+        BYBW/f3AWo6 C6PtAZHmnoijiFOZ1L712ao0KvRkaHjSjirWhCw1rCx9IQ==;
+Authentication-Results: mailpal.com; hw-attest=pass header.typ=VRT heade
+        r.alg=RS256 header.tier=virtual header.aid=urn:aid:global:id-rgp
+        nz-jmbvn-vpswz-xnwsp
+Authentication-Results: mailpal.com; hw-trust=pass header.trust_tier=vir
+        tual header.issuer=1id.com
+From: w11vtpm-Virtual <1id-jq8c84k4@mailpal.com>
+To: 1id-jq8c84k4@mailpal.com
+Subject: G4.6 virtual vTPM live round trip 1784552208
+Date: Mon, 20 Jul 2026 22:56:48 +1000
+Message-ID: <178455220824.3188.11497027029775143127@mailpal.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+Hardware-Trust-Proof: eyJhbGciOiJFUzI1NiIsImtpZCI6IjFpZC1od2F0dGVzdC1lcz
+        I1Ni0xIiwidHlwIjoic2Qrand0In0.eyJpc3MiOiJodHRwczovLzFpZC5jb20iLC
+        JpYXQiOjE3ODQ1NTIyMDgsImV4cCI6MTc4NDU1MjUwOCwibm9uY2UiOiI3cGNFTG
+        I4VldfOW9CRHluTjN6VHdpblZtc1ltWkJLRFJ5SmszcTlTRVhFIiwiX3NkX2FsZy
+        I6InNoYS0yNTYiLCJfc2QiOlsiVngtUTNFSGhjYjdpVXc4VC1aQVNHTVVxaUdQUm
+        lEbUU3dWJHM1lPc1FrWSJdfQ.25Sm9Iia2FbrPi1ayk-vFUTIDhmvyJp-eLX0Dya
+        69aWqZtkQFC2BLurh_UT45mj80yIB1HAeDtrr2dIlw-Wglw~WyJBdlRTYkI0bjIw
+        cm16QUdyZmt1YjR3IiwidHJ1c3RfdGllciIsInZpcnR1YWwiXQ~
+X-1ID-Contact-Token: df4f2e4c
+Hardware-Attestation: v=1;typ=VRT;alg=RS256;h=from:to:subject:date:messa
+        ge-id:content-transfer-encoding:content-type:mime-version:from:t
+        o:subject:date:message-id:content-transfer-encoding:content-type
+        :mime-version;bh=j94kQdwkDpr0beg_2AYPsvBliBSyGJGVgB5HAaW4fxQ;ts=
+        1784552211;chain=MIIL/wYJKoZIhvcNAQcCoIIL8DCCC+wCAQExDzANBglghkg
+        BZQMEAgEFADALBgkqhkiG9w0BBwGgggpUMIID3zCCAsegAwIBAgIUCwbxpfLn+aY
+        aUdcXrA+ytHDfwU8wDQYJKoZIhvcNAQELBQAwLjEMMAoGA1UECgwDMUlEMR4wHAY
+
+
+
+Drake                    Expires 18 January 2027               [Page 65]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+        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
+
+
+
+Drake                    Expires 18 January 2027               [Page 66]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+        G9w0BAQsFAAOCAQEACFFfOyUb3aShopN8ZHYo9m84/ezFm8cF6Z/Bvi0gLBp6BmU
+        20fO2o/upwupZ+wcbQJqhvx7atuMyOk9oxjzXfbySCXuChU9MS6rcB/mOhk4Csd+
+        LOBCX2vlHBP0bfL8CANOdkMXq5Qq3k/W7w9R3y3p1QA28iMy+oPp5XwRGKgy74Ev
+        salsO/Luya+awKnLWKxjRpKWHXXYsZugm54ZJuIzHfnAwqvqh9fLQQT4jPYnE9fX
+        6s/PFn1gjmJhxQRWm0FlbQiTzewtcl1UbpnvjlrCc4BCeSuJHC3ZvSv8lFua7tNC
+        vMC/8rQ9NdO5h/cNjGoKXTjDxymARo93mtYbjJjGCAW8wggFrAgEBMEYwLjEMMAo
+        GA1UECgwDMUlEMR4wHAYDVQQDDBUxSUQgSW50ZXJtZWRpYXRlIENBIEECFAsG8aX
+        y5/mmGlHXF6wPsrRw38FPMA0GCWCGSAFlAwQCAQUAMAsGCSqGSIb3DQEBCwSCAQC
+        9dPL6RvUoquFR8wcLUWWyIPD4/jdCxAhdbHhOr5uUxfy2kiInrp6ah/w7iPa1G4b
+        pyde8k/62jtYbjYuLy1n1T1feS8Ebcl4dpKld1Ziumm8ljBhnDYU7IHnZITcjHdh
+        Z1lQn7gGhzGMcxEwXlfA8cqZkRkFu4/yb1DKmU7tqoSN8M9GUmkyw46n8mR24gRc
+        2b/TaIOq0DnV/4Fs1q7++H9jSE4GpCQwzGAA8mpZ8xptYdXUY6HBC3q4qGV4Fbs/
+        DG+JKJU1s6GU8/3cvrDxp/piL/kP6qi/WQKF5EJFJL/iiiqkaB0b1LDmdjZ75eMJ
+        VNf9YC+AhVaj2lnhgCZJU;aid=urn:aid:global:id-rgpnz-jmbvn-vpswz-xn
+        wsp
+
+Signed by a VMware vTPM AK (virtual tier).
+
+        Figure 4: Example 4: Virtual-Tier vTPM (Combined Mode)
+
+B.5.  Example 5: Declared-Tier Software Key (Combined Mode)
+
+   The declared tier: no hardware root, a software-held P-256 key
+   (typ=SFT).  It carries the identical header structure as the hardware
+   tiers -- verifiers treat it uniformly and simply observe the lower
+   trust_tier.  This is the always-available fallback.
+
+Delivered-To: 1id-j4o5dtqu@mailpal.com
+X-Spam-Status: No
+Received: from mac-mini.local (unknown [110.143.72.26] (AS1221 Telstra L
+        imited, AU)) (using TLSv1.3 with cipher TLS13_AES_256_GCM_SHA384
+        ) by mail.mailpal.com (Stalwart SMTP) with ESMTPSA id 46EB497EB7
+        01496; Mon, 20 Jul 2026 19:59:46 +0000
+Authentication-Results: mail.mailpal.com; none
+Return-Path: <1id-j4o5dtqu@mailpal.com>
+DKIM-Signature: v=1; a=rsa-sha256; s=rsa; d=mailpal.com; c=relaxed/relax
+        ed; r=y; h=MIME-Version:Content-Transfer-Encoding:Content-Type:M
+        essage-ID:Date :Subject:To:From:Reply-To:Cc:In-Reply-To:Referenc
+        es:List-Id :List-Unsubscribe:Organization:User-Agent:Thread-Topi
+        c:Thread-Index; t=1784577586; x=1785441586; bh=/hBmNom6dgX16Jiqg
+        eVMaCDc9YMjq3t5amM+dCWybRQ= ; b=a9hL+UCir7pPpAU3gEl+ET2513ewmh6/
+        gbPJK/QQJkQO2vHqyMClALeCeS2gfhOd1s7oCuS 5kZMW5vjjw4671bvdG2XOt5f
+        1Hmiej3p8EVgXcwqyYlVc2v7aY1kawi0j/hMsQL3vVkH1bfvgro NQeJM2xKYbxY
+        bX7iy6KBG6pJw7VF72qFVwvTMEcO1a0mlgmBhBqRj4MdBPu9QabGt0luGq5yClc
+        YXv/skxFzEA5JE1mUkiZnKSagpd3qF/UQbAN2CncQy0Uc4n1ex72vxKJp7iujbFQ
+        PzAirisjUvr jhfmLqcUvgo4jEI4efFdnH8vaCwRJdonEX+oXPIrHqtOZQ==;
+Authentication-Results: mailpal.com; hw-attest=pass header.typ=SFT heade
+        r.alg=ES256 header.tier=declared header.aid=urn:aid:global:id-mz
+
+
+
+Drake                    Expires 18 January 2027               [Page 67]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+        bdt-thkzh-fsfmt-mpfmp
+Authentication-Results: mailpal.com; hw-trust=pass header.trust_tier=dec
+        lared header.issuer=1id.com
+From: 1id-j4o5dtqu@mailpal.com
+To: 1id-j4o5dtqu@mailpal.com
+Subject: G4.6 declared software live round trip 1784577583
+Date: Tue, 21 Jul 2026 05:59:43 +1000
+Message-ID: <178457758322.5003.16734413728945092494@mailpal.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+Hardware-Trust-Proof: eyJhbGciOiJFUzI1NiIsImtpZCI6IjFpZC1od2F0dGVzdC1lcz
+        I1Ni0xIiwidHlwIjoic2Qrand0In0.eyJpc3MiOiJodHRwczovLzFpZC5jb20iLC
+        JpYXQiOjE3ODQ1Nzc1ODMsImV4cCI6MTc4NDU3Nzg4Mywibm9uY2UiOiJtbUFacX
+        Qxa0NsUkk5bVFDRlRKUWUtWXRkQy02Mkhsb0p4YkQtNkZvU0s0IiwiX3NkX2FsZy
+        I6InNoYS0yNTYiLCJfc2QiOlsiaUg1Z3diZk16eXJNQ0Vsel9wRm1CSXl0akV0NX
+        FBWW5YV1l3WjBYaXlHUSJdfQ.fUUZ6OWs-90IFtyWwzp1uCqrKNg2xj4CYqxxbZk
+        hvlxouIaQHUqRhoGeCKY8fcNz-sX0oWVgZ3grivnoHijKvQ~WyJsa21BNXc2VU1v
+        VzIzUUNuVTZzU3NnIiwidHJ1c3RfdGllciIsImRlY2xhcmVkIl0~
+X-1ID-Contact-Token: 3468961f
+Hardware-Attestation: v=1;typ=SFT;alg=ES256;h=from:to:subject:date:messa
+        ge-id:content-transfer-encoding:content-type:mime-version:from:t
+        o:subject:date:message-id:content-transfer-encoding:content-type
+        :mime-version;bh=_hBmNom6dgX16JiqgeVMaCDc9YMjq3t5amM-dCWybRQ;ts=
+        1784577584;chain=MIIKkQYJKoZIhvcNAQcCoIIKgjCCCn4CAQExDzANBglghkg
+        BZQMEAgEFADALBgkqhkiG9w0BBwGgggmkMIIDLzCCAhegAwIBAgIUPZHr3I6iGkK
+        R9gw0VtzPGm2FBuwwDQYJKoZIhvcNAQELBQAwLjEMMAoGA1UECgwDMUlEMR4wHAY
+        DVQQDDBUxSUQgSW50ZXJtZWRpYXRlIENBIEEwHhcNMjYwNzIwMTk1OTQwWhcNMjc
+        wNzIwMTk1OTQwWjBZMQwwCgYDVQQKDAMxSUQxMjAwBgNVBAMMKXVybjphaWQ6Z2x
+        vYmFsOmlkLW16YmR0LXRoa3poLWZzZm10LW1wZm1wMRUwEwYDVQQFEwwxaWQtajR
+        vNWR0cXUwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASoTabvB0wj+3pVfZU3c7c
+        vyjHEzII4cAQryKdgjEl8aOZITdtCsGRaODzZrwW+e/agj88wR9ItQ9HxLBYHcRK
+        4o4HkMIHhMDQGA1UdEQQtMCuGKXVybjphaWQ6Z2xvYmFsOmlkLW16YmR0LXRoa3p
+        oLWZzZm10LW1wZm1wMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1U
+        dDgQWBBSh8AmUyFLvqGOZie9nsxy3tT3gWzAfBgNVHSMEGDAWgBRnIsB54FVyNie
+        zRKLzTN+AXd+WrjAWBgorBgEEAYPUXwEBBAhkZWNsYXJlZDAiBgorBgEEAYPUXwE
+        CBBQyMDI2LTA3LTIwVDE5OjU5OjM4WjAPBgorBgEEAYPUXwEDBAEAMA0GCSqGSIb
+        3DQEBCwUAA4IBAQAkEh+2KcFYTLFw19W18Wvgp9XHgJdFFca4CzKK87pY42b7KrX
+        SDQ/HcKF2N4P7gu3OqJSCCDJfiZz0/J5f50pdAn2ZCvmdalTVCrKXk7sCrB3MZNf
+        oBHZXd4X61KlEbN5qQpElhL80eWazCdvETVRW+lGqvvDe5NXZIyj1oW3yITNFugB
+        I1V95HggNn6SFie0L/SlWEkYik6IEAWcW6C7boOvz2ry5jA0IdT84vC3H8DAx3AF
+        P744FEzOXn8BbTKBaTcouPWo8dvaNSLyLiu501pcki/xLudm7SqEUuI6dngZge49
+        EWwcmQrRsBEQRnZ75QY+fTyiX1Xfp6TwwmhnNMIIDSDCCAjCgAwIBAgIUSEEYK28
+        j6n6Vhr+w4PvDkiuyQbEwDQYJKoZIhvcNAQELBQAwJjEMMAoGA1UECgwDMUlEMRY
+        wFAYDVQQDDA0xSUQgUm9vdCBDQSBBMB4XDTI2MDMxNDE0MTM0N1oXDTMxMDMxMzE
+        0MTM0N1owLjEMMAoGA1UECgwDMUlEMR4wHAYDVQQDDBUxSUQgSW50ZXJtZWRpYXR
+        lIENBIEEwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC554xsVDRUJ3f
+        MEQISK3ayhz2DTFpHDMvhBP6MHqTt/116HDJNj+2qXJdAmVH8GdXzMwm/tt9nrGr
+
+
+
+Drake                    Expires 18 January 2027               [Page 68]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+        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;aid=urn:aid:global
+        :id-mzbdt-thkzh-fsfmt-mpfmp
+
+Signed by a software key (declared tier).
+
+   Figure 5: Example 5: Declared-Tier Software Key (Combined Mode)
+
+B.6.  Verification Failure Examples
+
+   The following Authentication-Results headers illustrate what
+   receiving mail servers emit when verification fails.  These are from
+   actual test messages where the attestation was malformed or tampered
+   with.  Implementers building verifiers should emit similar diagnostic
+   information in the parenthetical comment.
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 69]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   Mode 2 (SD-JWT Trust Proof) failure -- message-binding nonce
+   mismatch, indicating the SD-JWT was not bound to this specific
+   message (possible replay or header modification):
+
+   Authentication-Results: mailpal.com; hw-trust=fail
+     header.trust_tier=declared header.issuer=1id.com
+     (Message-binding nonce mismatch: got
+     'uVgDzsXUJUPch1I-hRM3vGgip4uIvrkE1aeixhsp3OU', expected
+     'lB_mxWwfU9o301aGO4Yb3GdTzKm)
+
+   Mode 1 (Direct Hardware Attestation) failure -- cryptographic
+   signature does not match, indicating the message body or signed
+   headers were modified after signing (or the signing key does not
+   match the certificate chain):
+
+   Authentication-Results: mailpal.com; hw-attest=fail
+     header.typ=TPM header.alg=RS256 header.tier=sovereign
+     header.aid=urn:aid:global:id-fcwgq-krznn-gdjzw-hmcbg
+     (Signature verification failed: Cryptographic signature
+     does not match)
+
+Appendix C.  Appendix: Applicability to Other Transports
+
+   The CMS attestation bundle (the "chain" value defined in Section 5.2)
+   and the SD-JWT trust proof (defined in Section 6.2) are self-
+   contained data structures whose verification algorithms (Section 5.3
+   and Section 6.4) do not depend on email semantics.  The body hash
+   (bh) generalizes to a content hash over whatever payload the
+   attestation covers.
+
+   Potential transport bindings include but are not limited to:
+
+   HTTP  The CMS attestation bundle or SD-JWT trust proof could be
+      carried in HTTP request headers or in HTTP message bodies.  The
+      content hash would cover the HTTP request or response payload.
+      This binding is particularly relevant for API calls by autonomous
+      AI agents, where the receiving service benefits from verifying
+      that the request originated on attested hardware.  The agent
+      identity URN (Section 4.1) provides a persistent key for cross-
+      protocol reputation tracking.
+
+   Agent-to-Agent Protocols  Emerging protocols for AI agent
+      communication -- tool invocation, task delegation, capability
+      discovery -- could carry attestation evidence alongside each
+      request, enabling agents to verify each other's hardware trust
+      level before exchanging sensitive data or delegating privileged
+      operations.
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 70]
+
+Internet-Draft         Hardware Email Attestation              July 2026
+
+
+   WebSocket and Streaming Protocols  Attestation evidence could be
+      presented during connection establishment (e.g., in the WebSocket
+      upgrade request) to establish hardware trust for the duration of a
+      persistent connection.
+
+   Detailed specification of these bindings is out of scope for this
+   document and is deferred to future companion documents.
+
+Appendix D.  Acknowledgments
+
+   The concept of using hardware attestation for email sender
+   verification was developed in the context of building a hardware
+   identity registrar for autonomous AI agents.  The author thanks the
+   Trusted Computing Group for the TPM 2.0 specification, the authors of
+   [RFC9901] (SD-JWT) for the selective disclosure mechanism, the
+   authors of [RFC9334] (RATS Architecture) for establishing the remote
+   attestation architecture that this document builds upon, and the
+   authors of [RFC8141] (URN) for the persistent identifier framework
+   that underpins the federated agent identity model.
+
+Author's Address
+
+   Christopher Drake
+   1id.com
+   Australia
+   Email: cnd@1id.com
+   URI:   https://1id.com
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Drake                    Expires 18 January 2027               [Page 71]
